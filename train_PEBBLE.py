@@ -38,9 +38,20 @@ class Workspace(object):
             log_frequency=cfg.log_frequency,
             agent=cfg.agent.name)
 
+        # Base/global seed (kept for reproducibility across runs)
         utils.set_seed_everywhere(cfg.seed)
         self.device = torch.device(cfg.device)
         self.log_success = False
+
+        # ---- New: RNGs & seed ranges ----
+        # TRAIN seeds will be drawn with replacement from [0, 400)
+        # EVAL seeds will be drawn without replacement from [400, 500) per evaluate() call
+        self._train_seed_low, self._train_seed_high = 0, 400
+        self._eval_seed_low, self._eval_seed_high = 400, 500
+        # independent RNGs derived from cfg.seed for reproducibility
+        self._train_rng = np.random.RandomState(int(cfg.seed))
+        # eval RNG is re-created inside evaluate() so each evaluate() uses the same set of seeds
+        # ----------------------------------
 
         # copy prompt file into the log directory for reproducibility
         current_file_path = os.path.dirname(os.path.realpath(__file__))
@@ -154,14 +165,45 @@ class Workspace(object):
             self.agent.load(self.cfg.agent_model_load_dir, 1000000)
 
         # switches and target network for value-difference reward
-        self.use_value_diff_reward = getattr(cfg, "use_value_diff_reward", False)
-        self.value_target_sync_every = int(getattr(cfg, "value_target_sync_every", 1000))
+        self.use_value_diff_reward = bool(getattr(cfg, "use_value_diff_reward", False))
+
+        # robust null handling for value_target_sync_every:
+        # - baseline: you don't need to pass it
+        # - value_diff: if not passed / None / "None", default to 1000
+        raw_sync = getattr(cfg, "value_target_sync_every", None)
+
+        def _is_null(v):
+            if v is None:
+                return True
+            if isinstance(v, str) and v.lower() in ["none", "null", "~", ""]:
+                return True
+            return False
+
+        if _is_null(raw_sync):
+            self.value_target_sync_every = 1000
+        else:
+            self.value_target_sync_every = int(raw_sync)
+
         if self.use_value_diff_reward:
             # a frozen copy to stabilize V(s) used for r_t = γ V(s_t) − V(s_{t-1})
             self.value_target = copy.deepcopy(self.reward_model)
             self.value_target.eval()
         else:
             self.value_target = None
+
+    def _reset_with_seed(self, ep_seed):
+        """
+        Helper: reset env with a per-episode seed, handling old/new Gym APIs.
+        Returns the observation (possibly tuple for metaworld; caller will handle slicing).
+        """
+        try:
+            obs = self.env.reset(seed=int(ep_seed))
+        except TypeError:
+            # Older Gym: must call env.seed(...) before reset()
+            if hasattr(self.env, "seed"):
+                self.env.seed(int(ep_seed))
+            obs = self.env.reset()
+        return obs
 
     def evaluate(self, save_additional=False):
         average_episode_reward = 0
@@ -172,24 +214,48 @@ class Workspace(object):
         if not os.path.exists(save_gif_dir):
             os.makedirs(save_gif_dir)
 
+        # ---- New: deterministic per-eval-call RNG & unique seeds in [400, 500) ----
+        eval_rng = np.random.RandomState(int(self.cfg.seed) + 424242)
+        eval_pool = np.arange(self._eval_seed_low, self._eval_seed_high, dtype=int)
+        n_eval = int(self.cfg.num_eval_episodes)
+        if n_eval <= len(eval_pool):
+            eval_seeds = eval_rng.choice(eval_pool, size=n_eval, replace=False)
+        else:
+            # more eval episodes than pool size: fall back to with-replacement
+            eval_seeds = eval_rng.choice(eval_pool, size=n_eval, replace=True)
+        # ---------------------------------------------------------------------------
+
         all_ep_infos = []
         for episode in range(self.cfg.num_eval_episodes):
             print("evaluating episode {}".format(episode))
             images = []
-            obs = self.env.reset()
+
+            # === Per-episode reseed for EVAL (disjoint range [400, 500)) ===
+            ep_seed = int(eval_seeds[episode])
+            obs = self._reset_with_seed(ep_seed)
             if "metaworld" in self.cfg.env:
                 obs = obs[0]
-
+            # debug print
+            try:
+                qpos = np.array(self.env.unwrapped.sim.data.qpos[:6]).round(4)
+                print(f"[EVAL] ep={episode} seed={ep_seed} qpos[:6]={qpos}")
+            except Exception:
+                print(f"[EVAL] ep={episode} seed={ep_seed} obs[:5]={np.array(obs[:5]).round(4)}")
+            
             self.agent.reset()
             done = False
-            episode_reward = 0
-            true_episode_reward = 0
+            episode_reward = 0          # <- will accumulate reward_hat now
+            true_episode_reward = 0     # <- still accumulate true reward
             if self.log_success:
                 episode_success = 0
 
             ep_info = []
             rewards = []
             t_idx = 0
+
+            # previous frame buffer for value-difference reward in eval
+            prev_rgb_image = None
+
             while not done:
                 with utils.eval_mode(self.agent):
                     action = self.agent.act(obs, sample=False)
@@ -203,21 +269,89 @@ class Workspace(object):
                 rewards.append(reward)
                 if "metaworld" in self.cfg.env:
                     rgb_image = self.env.render()
-                    if self.cfg.mode != 'eval':
-                        rgb_image = rgb_image[::-1, :, :]
-                        if "drawer" in self.cfg.env or "sweep" in self.cfg.env:
-                            rgb_image = rgb_image[100:400, 100:400, :]
-                    else:
-                        rgb_image = rgb_image[::-1, :, :]
+                    rgb_image = rgb_image[::-1, :, :]
+                    if "drawer" in self.cfg.env or "sweep" in self.cfg.env:
+                        rgb_image = rgb_image[100:400, 100:400, :]
                 elif self.cfg.env in ["CartPole-v1", "Acrobot-v1", "MountainCar-v0", "Pendulum-v0"]:
                     rgb_image = self.env.render(mode='rgb_array')
+                elif 'softgym' in self.cfg.env:
+                    rgb_image = self.env.render(mode='rgb_array', hide_picker=True)
                 else:
                     rgb_image = self.env.render(mode='rgb_array')
+
+                if self.cfg.image_reward and 'Water' not in self.cfg.env and 'Rope' not in self.cfg.env:
+                    rgb_image = cv2.resize(rgb_image, (self.image_height, self.image_width))
 
                 if 'softgym' not in self.cfg.env:
                     images.append(rgb_image)
 
-                episode_reward += reward
+                # ===================== reward_hat computation for eval =====================
+                if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
+                    if self.use_value_diff_reward and self.cfg.image_reward:
+                        try:
+                            gamma_v = float(self.cfg.agent.params.discount)
+                        except Exception:
+                            gamma_v = 0.99
+
+                        if rgb_image is None:
+                            reward_hat = 0.0
+                        else:
+                            curr_img = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
+                            curr_img = curr_img[:, ::self.resize_factor, ::self.resize_factor]
+                            curr_img = curr_img.reshape(1, 3, curr_img.shape[1], curr_img.shape[2])
+
+                            if prev_rgb_image is None:
+                                reward_hat = 0.0
+                            else:
+                                prev_img = prev_rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
+                                prev_img = prev_img[:, ::self.resize_factor, ::self.resize_factor]
+                                prev_img = prev_img.reshape(1, 3, prev_img.shape[1], prev_img.shape[2])
+
+                                target_net = self.value_target if self.value_target is not None else self.reward_model
+                                target_net.eval()
+                                v_tm1 = float(target_net.r_hat(prev_img))
+                                v_t = float(target_net.r_hat(curr_img))
+                                reward_hat = gamma_v * v_t - v_tm1
+
+                            prev_rgb_image = rgb_image
+                    else:
+                        if not self.cfg.image_reward:
+                            self.reward_model.eval()
+                            reward_hat = self.reward_model.r_hat(np.concatenate([obs, action], axis=-1))
+                            self.reward_model.train()
+                        else:
+                            image = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
+                            image = image[:, ::self.resize_factor, ::self.resize_factor]
+                            image = image.reshape(1, 3, image.shape[1], image.shape[2])
+                            self.reward_model.eval()
+                            reward_hat = self.reward_model.r_hat(image)
+                            self.reward_model.train()
+
+                elif self.reward == 'blip2_image_text_matching':
+                    query_image = rgb_image
+                    query_prompt = clip_env_prompts[self.cfg.env]
+                    reward_hat = blip2_image_text_matching(query_image, query_prompt) * 2 - 1
+                    if self.cfg.flip_vlm_label:
+                        reward_hat = -reward_hat
+
+                elif self.reward == 'clip_image_text_matching':
+                    query_image = rgb_image
+                    query_prompt = clip_env_prompts[self.cfg.env]
+                    reward_hat = clip_image_text_matching(query_image, query_prompt) * 2 - 1
+                    if self.cfg.flip_vlm_label:
+                        reward_hat = -reward_hat
+
+                elif self.reward == 'gt_task_reward':
+                    reward_hat = reward
+
+                elif self.reward == 'sparse_task_reward':
+                    reward_hat = extra['success']
+
+                else:
+                    reward_hat = reward
+                # ===========================================================================
+
+                episode_reward += reward_hat
                 true_episode_reward += reward
                 if self.log_success:
                     episode_success = max(episode_success, extra['success'])
@@ -230,26 +364,30 @@ class Workspace(object):
             if 'softgym' in self.cfg.env:
                 images = self.env.video_frames
 
-            # save gif locally
             video_frames = np.array(images)
+
+            # Always save a local GIF for every eval episode
             save_gif_path = os.path.join(
                 save_gif_dir,
                 'step{:07}_episode{:02}_{}.gif'.format(self.step, episode, round(true_episode_reward, 2)))
-            utils.save_numpy_as_gif(video_frames, save_gif_path)
-
-            # log gif as wandb.Video (all eval gifs)
             try:
-                # video_frames: (T, H, W, 3) -> (T, C, H, W)
-                video_tensor = video_frames.transpose(0, 3, 1, 2)
-                wandb.log(
-                    {
-                        f"eval/video_step{self.step:07d}_ep{episode:02d}":
-                            wandb.Video(video_tensor, fps=12, format="gif")
-                    },
-                    step=self.step
-                )
+                utils.save_numpy_as_gif(video_frames, save_gif_path)
             except Exception as e:
-                print(f"Failed to log eval video for episode {episode}: {e}")
+                print(f"Failed to save eval GIF for episode {episode}: {e}")
+
+            # Only upload ONE GIF to W&B per evaluate() call: pick episode 0
+            if episode == 0:
+                try:
+                    video_tensor = video_frames.transpose(0, 3, 1, 2)
+                    wandb.log(
+                        {
+                            f"eval/video_step{self.step:07d}_ep{episode:02d}":
+                                wandb.Video(video_tensor, fps=12, format="gif")
+                        },
+                        step=self.step
+                    )
+                except Exception as e:
+                    print(f"Failed to log eval video for episode {episode}: {e}")
 
             if save_additional:
                 save_image_dir = os.path.join(self.logger._log_dir, 'eval_images')
@@ -403,9 +541,18 @@ class Workspace(object):
                         train_metrics["train/episode_success"] = episode_success
                     wandb.log(train_metrics, step=self.step)
 
-                obs = self.env.reset()
+                # === Per-episode reseed for TRAIN (range [0, 400)) ===
+                ep_seed = int(self._train_rng.randint(self._train_seed_low, self._train_seed_high))
+                obs = self._reset_with_seed(ep_seed)
                 if "metaworld" in self.cfg.env:
                     obs = obs[0]
+                # debug print
+                try:
+                    qpos = np.array(self.env.unwrapped.sim.data.qpos[:6]).round(4)
+                    print(f"[TRAIN] ep={episode} seed={ep_seed} qpos[:6]={qpos}")
+                except Exception:
+                    print(f"[TRAIN] ep={episode} seed={ep_seed} obs[:5]={np.array(obs[:5]).round(4)}")
+
                 self.agent.reset()
                 done = False
                 episode_reward = 0
@@ -553,6 +700,10 @@ class Workspace(object):
             else:
                 rgb_image = None
 
+            # for per-step wandb logging of value-diff internals
+            v_t = np.nan
+            v_tm1 = np.nan
+
             # ===================== reward computation =====================
             if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                 if self.use_value_diff_reward and self.cfg.image_reward:
@@ -584,15 +735,16 @@ class Workspace(object):
                         # update previous-frame cache with current raw rgb
                         prev_rgb_image = rgb_image
 
-                        # periodic target sync
-                        if self.step > 0 and (self.step % self.value_target_sync_every == 0):
-                            # rebuild frozen target from current reward model
-                            if self.value_target is not None:
-                                del self.value_target
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                            self.value_target = copy.deepcopy(self.reward_model)
-                            self.value_target.eval()
+                        # periodic target sync (only if sync_every > 0)
+                        if (self.value_target_sync_every is not None) and (self.value_target_sync_every > 0):
+                            if self.step > 0 and (self.step % self.value_target_sync_every == 0):
+                                # rebuild frozen target from current reward model
+                                if self.value_target is not None:
+                                    del self.value_target
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                                self.value_target = copy.deepcopy(self.reward_model)
+                                self.value_target.eval()
                 else:
                     # Original path: treat reward_model output as immediate reward (for image or non-image)
                     if not self.cfg.image_reward:
@@ -630,6 +782,17 @@ class Workspace(object):
 
             else:
                 reward_hat = reward
+
+            # -------- per-step wandb logging --------
+            log_dict = {
+                "train/reward_hat": float(reward_hat),  # baseline & value_diff
+                "train/true_reward": float(reward),     # environment true reward
+            }
+            if self.use_value_diff_reward and self.cfg.image_reward:
+                log_dict["train/v_t"] = float(v_t)
+                log_dict["train/v_tm1"] = float(v_tm1)
+            wandb.log(log_dict, step=self.step)
+            # ---------------------------------------
 
             # allow infinite bootstrap
             done = float(done)
@@ -699,4 +862,3 @@ def main(cfg):
 
 if __name__ == '__main__':
     main()
-
