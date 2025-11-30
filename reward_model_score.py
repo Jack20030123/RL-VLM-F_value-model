@@ -202,11 +202,40 @@ class RewardModelScore:
         self.flip_vlm_label = flip_vlm_label
         self.train_times = 0
         self.save_query_interval = save_query_interval
+
+        # -------- cached VLM preference labels (robust null handling) --------
+        self.read_cache_idx = 0
+        self.all_cached_labels = []
+
+        # keep raw value first
         self.cached_label_path = cached_label_path
-        if self.cached_label_path is not None:
+
+        def _is_null_path(p):
+            if p is None:
+                return True
+            if isinstance(p, str) and p.lower() in ["none", "null", "~", ""]:
+                return True
+            return False
+
+        if _is_null_path(self.cached_label_path):
+            self.cached_label_path = None
+        else:
+            file_path = os.path.abspath(__file__)
+            dir_path = os.path.dirname(file_path)
+
+            p = str(self.cached_label_path)
+            if os.path.isabs(p):
+                self.cached_label_path = p
+            else:
+                self.cached_label_path = os.path.join(dir_path, p)
+
+            if not os.path.isdir(self.cached_label_path):
+                raise FileNotFoundError(f"cached_label_path not found: {self.cached_label_path}")
+
             all_cached_labels = sorted(os.listdir(self.cached_label_path))
-            self.all_cached_labels = [os.path.join(self.cached_label_path, x) for x in all_cached_labels]
-            self.read_cache_idx = 0
+            self.all_cached_labels = [
+                os.path.join(self.cached_label_path, x) for x in all_cached_labels
+            ]
     
     def eval(self,):
         for i in range(self.de):
@@ -1020,3 +1049,4 @@ class RewardModelScore:
         ensemble_acc = ensemble_acc / total
         
         return ensemble_acc
+
