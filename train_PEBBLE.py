@@ -38,26 +38,15 @@ class Workspace(object):
             log_frequency=cfg.log_frequency,
             agent=cfg.agent.name)
 
-        # Base/global seed (kept for reproducibility across runs)
         utils.set_seed_everywhere(cfg.seed)
         self.device = torch.device(cfg.device)
         self.log_success = False
 
-        # ---- New: RNGs & seed ranges ----
-        # TRAIN seeds will be drawn with replacement from [0, 400)
-        # EVAL seeds will be drawn without replacement from [400, 500) per evaluate() call
-        self._train_seed_low, self._train_seed_high = 0, 400
-        self._eval_seed_low, self._eval_seed_high = 400, 500
-        # independent RNGs derived from cfg.seed for reproducibility
-        self._train_rng = np.random.RandomState(int(cfg.seed))
-        # eval RNG is re-created inside evaluate() so each evaluate() uses the same set of seeds
-        # ----------------------------------
-
-        # copy prompt file into the log directory for reproducibility
+        # Copy prompt file into the log directory for exact reproducibility
         current_file_path = os.path.dirname(os.path.realpath(__file__))
         os.system("cp {}/prompt.py {}/".format(current_file_path, self.logger._log_dir))
 
-        # build environment
+        # Build environment
         if 'metaworld' in cfg.env:
             self.env = utils.make_metaworld_env(cfg)
             self.log_success = True
@@ -68,6 +57,7 @@ class Workspace(object):
         else:
             self.env = utils.make_env(cfg)
 
+        # Agent I/O shapes
         cfg.agent.params.obs_dim = self.env.observation_space.shape[0]
         cfg.agent.params.action_dim = self.env.action_space.shape[0]
         cfg.agent.params.action_range = [
@@ -76,7 +66,7 @@ class Workspace(object):
         ]
         self.agent = hydra.utils.instantiate(cfg.agent)
 
-        # image sizes / resize factor for image-based reward/value
+        # Image sizes / resize factor for image-based reward/value heads
         image_height = image_width = cfg.image_size
         self.resize_factor = 1
         if "sweep" in cfg.env or 'drawer' in cfg.env or "soccer" in cfg.env:
@@ -95,23 +85,27 @@ class Workspace(object):
         self.image_height = image_height
         self.image_width = image_width
 
-        # choose replay capacity based on whether we store images
+        # Replay buffer capacity (smaller if storing images to control memory)
         img_capacity = int(getattr(cfg, "image_replay_capacity", 5000))
         cap = int(cfg.replay_buffer_capacity) if not self.cfg.image_reward else img_capacity
         self.replay_buffer = ReplayBuffer(
             self.env.observation_space.shape,
             self.env.action_space.shape,
-            cap,  # smaller capacity for image mode to control memory
+            cap,
             self.device,
             store_image=self.cfg.image_reward,
             image_size=image_height)
 
-        # logging counters
+        # Basic logging counters
         self.total_feedback = 0
         self.labeled_feedback = 0
         self.step = 0
 
-        # instantiate reward/value model (same class; trained from preferences)
+        # NEW: Count how many episodes succeeded across the entire training run
+        # (episode-level success; incremented by 1 for each successful episode)
+        self.total_success_episodes = 0
+
+        # Instantiate reward/value model (same class; trained from preferences)
         reward_model_class = RewardModel
         if self.reward == 'learn_from_preference':
             reward_model_class = RewardModel
@@ -119,7 +113,7 @@ class Workspace(object):
             reward_model_class = RewardModelScore
 
         self.reward_model = reward_model_class(
-            # original PEBBLE parameters
+            # Original PEBBLE parameters
             self.env.observation_space.shape[0],
             self.env.action_space.shape[0],
             ensemble_size=cfg.ensemble_size,
@@ -145,7 +139,7 @@ class Workspace(object):
             flip_vlm_label=cfg.flip_vlm_label,
             cached_label_path=cfg.cached_label_path,
 
-            # image-based reward/value model parameters
+            # Image-based reward/value model parameters
             image_reward=cfg.image_reward,
             image_height=image_height,
             image_width=image_width,
@@ -156,6 +150,7 @@ class Workspace(object):
             conv_n_channels=cfg.conv_n_channels,
         )
 
+        # Optional model loading
         if self.cfg.reward_model_load_dir != "None":
             print("loading reward model at {}".format(self.cfg.reward_model_load_dir))
             self.reward_model.load(self.cfg.reward_model_load_dir, 1000000)
@@ -164,10 +159,10 @@ class Workspace(object):
             print("loading agent model at {}".format(self.cfg.agent_model_load_dir))
             self.agent.load(self.cfg.agent_model_load_dir, 1000000)
 
-        # switches and target network for value-difference reward
+        # Switches and target network for value-difference reward
         self.use_value_diff_reward = bool(getattr(cfg, "use_value_diff_reward", False))
 
-        # robust null handling for value_target_sync_every:
+        # Robust null handling for value_target_sync_every:
         # - baseline: you don't need to pass it
         # - value_diff: if not passed / None / "None", default to 1000
         raw_sync = getattr(cfg, "value_target_sync_every", None)
@@ -185,27 +180,17 @@ class Workspace(object):
             self.value_target_sync_every = int(raw_sync)
 
         if self.use_value_diff_reward:
-            # a frozen copy to stabilize V(s) used for r_t = γ V(s_t) − V(s_{t-1})
+            # A frozen copy to stabilize V(s) used for r_t = γ V(s_t) − V(s_{t-1})
             self.value_target = copy.deepcopy(self.reward_model)
             self.value_target.eval()
         else:
             self.value_target = None
 
-    def _reset_with_seed(self, ep_seed):
-        """
-        Helper: reset env with a per-episode seed, handling old/new Gym APIs.
-        Returns the observation (possibly tuple for metaworld; caller will handle slicing).
-        """
-        try:
-            obs = self.env.reset(seed=int(ep_seed))
-        except TypeError:
-            # Older Gym: must call env.seed(...) before reset()
-            if hasattr(self.env, "seed"):
-                self.env.seed(int(ep_seed))
-            obs = self.env.reset()
-        return obs
-
     def evaluate(self, save_additional=False):
+        """Run evaluation episodes.
+        Local GIFs: save for EVERY episode (episode 0..N-1) under eval_gifs/.
+        W&B: upload ONLY episode 0 as a video artifact per evaluate() call.
+        """
         average_episode_reward = 0
         average_true_episode_reward = 0
         success_rate = 0
@@ -214,38 +199,18 @@ class Workspace(object):
         if not os.path.exists(save_gif_dir):
             os.makedirs(save_gif_dir)
 
-        # ---- New: deterministic per-eval-call RNG & unique seeds in [400, 500) ----
-        eval_rng = np.random.RandomState(int(self.cfg.seed) + 424242)
-        eval_pool = np.arange(self._eval_seed_low, self._eval_seed_high, dtype=int)
-        n_eval = int(self.cfg.num_eval_episodes)
-        if n_eval <= len(eval_pool):
-            eval_seeds = eval_rng.choice(eval_pool, size=n_eval, replace=False)
-        else:
-            # more eval episodes than pool size: fall back to with-replacement
-            eval_seeds = eval_rng.choice(eval_pool, size=n_eval, replace=True)
-        # ---------------------------------------------------------------------------
-
         all_ep_infos = []
         for episode in range(self.cfg.num_eval_episodes):
             print("evaluating episode {}".format(episode))
             images = []
-
-            # === Per-episode reseed for EVAL (disjoint range [400, 500)) ===
-            ep_seed = int(eval_seeds[episode])
-            obs = self._reset_with_seed(ep_seed)
+            obs = self.env.reset()
             if "metaworld" in self.cfg.env:
                 obs = obs[0]
-            # debug print
-            try:
-                qpos = np.array(self.env.unwrapped.sim.data.qpos[:6]).round(4)
-                print(f"[EVAL] ep={episode} seed={ep_seed} qpos[:6]={qpos}")
-            except Exception:
-                print(f"[EVAL] ep={episode} seed={ep_seed} obs[:5]={np.array(obs[:5]).round(4)}")
-            
+
             self.agent.reset()
             done = False
-            episode_reward = 0          # <- will accumulate reward_hat now
-            true_episode_reward = 0     # <- still accumulate true reward
+            episode_reward = 0          # Accumulate reward_hat
+            true_episode_reward = 0     # Accumulate true env reward
             if self.log_success:
                 episode_success = 0
 
@@ -253,7 +218,7 @@ class Workspace(object):
             rewards = []
             t_idx = 0
 
-            # previous frame buffer for value-difference reward in eval
+            # Previous frame buffer for value-difference reward during eval
             prev_rgb_image = None
 
             while not done:
@@ -291,7 +256,7 @@ class Workspace(object):
                         try:
                             gamma_v = float(self.cfg.agent.params.discount)
                         except Exception:
-                            gamma_v = 0.99
+                            gamma_v = 1
 
                         if rgb_image is None:
                             reward_hat = 0.0
@@ -366,7 +331,7 @@ class Workspace(object):
 
             video_frames = np.array(images)
 
-            # Always save a local GIF for every eval episode
+            # --- NEW: Always save a local GIF for EVERY eval episode ---
             save_gif_path = os.path.join(
                 save_gif_dir,
                 'step{:07}_episode{:02}_{}.gif'.format(self.step, episode, round(true_episode_reward, 2)))
@@ -375,7 +340,7 @@ class Workspace(object):
             except Exception as e:
                 print(f"Failed to save eval GIF for episode {episode}: {e}")
 
-            # Only upload ONE GIF to W&B per evaluate() call: pick episode 0
+            # --- W&B: Upload ONLY episode 0 per evaluate() call ---
             if episode == 0:
                 try:
                     video_tensor = video_frames.transpose(0, 3, 1, 2)
@@ -409,6 +374,7 @@ class Workspace(object):
             if self.log_success:
                 success_rate += episode_success
 
+        # Aggregate eval metrics
         average_episode_reward /= self.cfg.num_eval_episodes
         average_true_episode_reward /= self.cfg.num_eval_episodes
         if self.log_success:
@@ -435,7 +401,7 @@ class Workspace(object):
         wandb.log(eval_metrics, step=self.step)
 
     def learn_reward(self, first_flag=0):
-        # Collect preference labels and train the reward/value model (Signal A).
+        """Collect preference labels and train the reward/value model."""
         labeled_queries = 0
         if first_flag == 1:
             labeled_queries = self.reward_model.uniform_sampling()
@@ -461,7 +427,7 @@ class Workspace(object):
         train_acc = 0
         total_acc = 0
         if self.labeled_feedback > 0:
-            # preference training loop
+            # Preference training loop
             for epoch in range(self.cfg.reward_update):
                 if self.cfg.label_margin > 0 or self.cfg.teacher_eps_equal > 0:
                     self.reward_model.train()
@@ -489,7 +455,7 @@ class Workspace(object):
             episode_success = 0
         true_episode_reward = 0
 
-        # keep recent 10 train returns
+        # Keep recent 10 train returns
         avg_train_true_return = deque([], maxlen=10)
         start_time = time.time()
 
@@ -498,11 +464,12 @@ class Workspace(object):
         vlm_acc = 0
         eval_cnt = 0
 
-        # previous frame buffer for value-difference reward
+        # Previous frame buffer for value-difference reward
         prev_rgb_image = None
 
         while self.step < self.cfg.num_train_steps:
             if done:
+                # Episode boundary logging (for the episode that just finished)
                 if self.step > 0:
                     duration = time.time() - start_time
                     self.logger.log('train/duration', duration, self.step)
@@ -510,14 +477,21 @@ class Workspace(object):
                     self.logger.log('train/vlm_acc', vlm_acc, self.step)
                     for key, value in extra.items():
                         self.logger.log('train/' + key, value, self.step)
+
+                    # NEW: increment and log the cumulative count of successful episodes
+                    if self.log_success:
+                        self.total_success_episodes += int(episode_success)  # episode_success ∈ {0,1}
+                        self.logger.log('train/total_success_episodes', self.total_success_episodes, self.step)
+
                     start_time = time.time()
 
-                # periodic evaluation
+                # Periodic evaluation
                 if self.step > 0 and self.step % self.cfg.eval_frequency == 0:
                     self.logger.log('eval/episode', episode, self.step)
                     self.evaluate()
                     eval_cnt += 1
 
+                # Per-episode scalars
                 self.logger.log('train/episode_reward', episode_reward, self.step)
                 self.logger.log('train/true_episode_reward', true_episode_reward, self.step)
                 self.logger.log('train/total_feedback', self.total_feedback, self.step)
@@ -527,6 +501,7 @@ class Workspace(object):
                     self.logger.log('train/episode_success', episode_success, self.step)
                     self.logger.log('train/true_episode_success', episode_success, self.step)
 
+                # Pack and send to W&B
                 if self.step > 0:
                     train_metrics = {
                         "train/episode": episode,
@@ -539,20 +514,14 @@ class Workspace(object):
                     }
                     if self.log_success:
                         train_metrics["train/episode_success"] = episode_success
+                        # NEW: also send the cumulative success count (shows as a curve in W&B)
+                        train_metrics["train/total_success_episodes"] = self.total_success_episodes
                     wandb.log(train_metrics, step=self.step)
 
-                # === Per-episode reseed for TRAIN (range [0, 400)) ===
-                ep_seed = int(self._train_rng.randint(self._train_seed_low, self._train_seed_high))
-                obs = self._reset_with_seed(ep_seed)
+                # Reset for next episode
+                obs = self.env.reset()
                 if "metaworld" in self.cfg.env:
                     obs = obs[0]
-                # debug print
-                try:
-                    qpos = np.array(self.env.unwrapped.sim.data.qpos[:6]).round(4)
-                    print(f"[TRAIN] ep={episode} seed={ep_seed} qpos[:6]={qpos}")
-                except Exception:
-                    print(f"[TRAIN] ep={episode} seed={ep_seed} obs[:5]={np.array(obs[:5]).round(4)}")
-
                 self.agent.reset()
                 done = False
                 episode_reward = 0
@@ -568,7 +537,7 @@ class Workspace(object):
                 traj_images = []
                 ep_info = []
 
-                # capture an initial frame for value-difference reward
+                # Capture an initial frame for value-difference reward (train)
                 if self.use_value_diff_reward and self.cfg.image_reward:
                     if "metaworld" in self.cfg.env:
                         prev_rgb_image = self.env.render()
@@ -587,14 +556,14 @@ class Workspace(object):
                 else:
                     prev_rgb_image = None
 
-            # sample an action
+            # Sample an action
             if self.step < self.cfg.num_seed_steps:
                 action = self.env.action_space.sample()
             else:
                 with utils.eval_mode(self.agent):
                     action = self.agent.act(obs, sample=True)
 
-            # switch from unsupervised to supervised preference learning
+            # Switch from unsupervised to supervised preference learning
             if self.step == (self.cfg.num_seed_steps + self.cfg.num_unsup_steps):
                 print("finished unsupervised exploration!!")
 
@@ -609,23 +578,23 @@ class Workspace(object):
                         frac = 1
                     self.reward_model.change_batch(frac)
 
-                    # optional teacher thresholds
+                    # Optional teacher thresholds
                     new_margin = np.mean(avg_train_true_return) * (self.cfg.segment / self.env._max_episode_steps)
                     self.reward_model.set_teacher_thres_skip(new_margin)
                     self.reward_model.set_teacher_thres_equal(new_margin)
 
-                    # first preference learning
+                    # First preference learning
                     reward_learning_acc, vlm_acc = self.learn_reward(first_flag=1)
 
-                    # relabel replay with the updated model
+                    # Relabel replay with the updated model
                     self.reward_model.eval()
                     self.replay_buffer.relabel_with_predictor(self.reward_model)
                     self.reward_model.train()
 
-                # reset critic after unsupervised exploration
+                # Reset critic after unsupervised exploration
                 self.agent.reset_critic()
 
-                # warmup updates
+                # Warmup updates
                 self.agent.update_after_reset(
                     self.replay_buffer, self.logger, self.step,
                     gradient_update=self.cfg.reset_update,
@@ -634,7 +603,7 @@ class Workspace(object):
                 interact_count = 0
 
             elif self.step > self.cfg.num_seed_steps + self.cfg.num_unsup_steps:
-                # periodic preference learning and relabeling
+                # Periodic preference learning and relabeling
                 if self.total_feedback < self.cfg.max_feedback and (
                         self.reward == 'learn_from_preference' or self.reward == 'learn_from_score'):
                     if interact_count == self.cfg.num_interact:
@@ -652,7 +621,7 @@ class Workspace(object):
                         self.reward_model.set_teacher_thres_skip(new_margin * self.cfg.teacher_eps_skip)
                         self.reward_model.set_teacher_thres_equal(new_margin * self.cfg.teacher_eps_equal)
 
-                        # avoid exceeding max_feedback
+                        # Avoid exceeding max_feedback
                         if self.reward_model.mb_size + self.total_feedback > self.cfg.max_feedback:
                             self.reward_model.set_batch(self.cfg.max_feedback - self.total_feedback)
 
@@ -664,22 +633,22 @@ class Workspace(object):
 
                 self.agent.update(self.replay_buffer, self.logger, self.step, 1)
 
-            # unsupervised exploration updates (state entropy) before preference learning kicks in
+            # Unsupervised exploration updates (state entropy) before preference learning kicks in
             elif self.step > self.cfg.num_seed_steps:
                 if self.step % 1000 == 0:
                     print("unsupervised exploration!!")
                 self.agent.update_state_ent(self.replay_buffer, self.logger, self.step,
                                             gradient_update=1, K=self.cfg.topK)
 
-            # environment step
-            try:  # handle different gym APIs
+            # Environment step
+            try:  # Handle different gym APIs
                 next_obs, reward, done, extra = self.env.step(action)
             except:
                 next_obs, reward, terminated, truncated, extra = self.env.step(action)
                 done = terminated or truncated
             ep_info.append(extra)
 
-            # capture image if needed
+            # Capture image if needed
             if self.cfg.vlm_label or self.reward in ['blip2_image_text_matching', 'clip_image_text_matching'] or \
                (self.cfg.image_reward and self.reward not in ["gt_task_reward", "sparse_task_reward"]):
                 if "metaworld" in self.cfg.env:
@@ -700,11 +669,11 @@ class Workspace(object):
             else:
                 rgb_image = None
 
-            # for per-step wandb logging of value-diff internals
+            # For per-step W&B logging of value-diff internals
             v_t = np.nan
             v_tm1 = np.nan
 
-            # ===================== reward computation =====================
+            # ===================== reward computation (train) =====================
             if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                 if self.use_value_diff_reward and self.cfg.image_reward:
                     # Value-difference: r_t = gamma * V(s_t) - V(s_{t-1})
@@ -732,13 +701,13 @@ class Workspace(object):
                             v_t = float(self.value_target.r_hat(curr_img))
                             reward_hat = gamma_v * v_t - v_tm1
 
-                        # update previous-frame cache with current raw rgb
+                        # Update previous-frame cache with current raw rgb
                         prev_rgb_image = rgb_image
 
-                        # periodic target sync (only if sync_every > 0)
+                        # Periodic target sync (only if sync_every > 0)
                         if (self.value_target_sync_every is not None) and (self.value_target_sync_every > 0):
                             if self.step > 0 and (self.step % self.value_target_sync_every == 0):
-                                # rebuild frozen target from current reward model
+                                # Rebuild frozen target from current reward model
                                 if self.value_target is not None:
                                     del self.value_target
                                 if torch.cuda.is_available():
@@ -746,7 +715,7 @@ class Workspace(object):
                                 self.value_target = copy.deepcopy(self.reward_model)
                                 self.value_target.eval()
                 else:
-                    # Original path: treat reward_model output as immediate reward (for image or non-image)
+                    # Original path: treat reward_model output as immediate reward
                     if not self.cfg.image_reward:
                         self.reward_model.eval()
                         reward_hat = self.reward_model.r_hat(np.concatenate([obs, action], axis=-1))
@@ -762,7 +731,7 @@ class Workspace(object):
             elif self.reward == 'blip2_image_text_matching':
                 query_image = rgb_image
                 query_prompt = clip_env_prompts[self.cfg.env]
-                # scale to [-1, 1] since tanh is used in the reward/value head
+                # Scale to [-1, 1] since tanh is used in the reward/value head
                 reward_hat = blip2_image_text_matching(query_image, query_prompt) * 2 - 1
                 if self.cfg.flip_vlm_label:
                     reward_hat = -reward_hat
@@ -782,19 +751,19 @@ class Workspace(object):
 
             else:
                 reward_hat = reward
+            # =====================================================================
 
-            # -------- per-step wandb logging --------
+            # Per-step W&B logging (scalars)
             log_dict = {
-                "train/reward_hat": float(reward_hat),  # baseline & value_diff
-                "train/true_reward": float(reward),     # environment true reward
+                "train/reward_hat": float(reward_hat),   # baseline & value_diff
+                "train/true_reward": float(reward),      # environment true reward
             }
             if self.use_value_diff_reward and self.cfg.image_reward:
                 log_dict["train/v_t"] = float(v_t)
                 log_dict["train/v_tm1"] = float(v_tm1)
             wandb.log(log_dict, step=self.step)
-            # ---------------------------------------
 
-            # allow infinite bootstrap
+            # Allow infinite bootstrap
             done = float(done)
             if 'softgym' not in self.cfg.env:
                 done_no_max = 0 if episode_step + 1 == self.env._max_episode_steps else done
@@ -807,11 +776,11 @@ class Workspace(object):
             if self.log_success:
                 episode_success = max(episode_success, extra['success'])
 
-            # add transition to preference/value training buffer (Signal A pairs are formed inside the model)
+            # Add transition to preference/value training buffer (Signal A)
             if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                 self.reward_model.add_data(obs, action, reward, done, img=rgb_image)
 
-            # push transition into replay
+            # Push transition into replay buffer (image/non-image paths)
             if self.cfg.image_reward and self.reward not in ["gt_task_reward", "sparse_task_reward"]:
                 self.replay_buffer.add(
                     obs, action, reward_hat, next_obs, done, done_no_max,
@@ -825,11 +794,12 @@ class Workspace(object):
             self.step += 1
             interact_count += 1
 
-            # periodic checkpointing
+            # Periodic checkpointing
             if self.step % self.cfg.save_interval == 0 and self.step > 0:
                 self.agent.save(model_save_dir, self.step)
                 self.reward_model.save(model_save_dir, self.step)
 
+        # Final checkpoint
         self.agent.save(model_save_dir, self.step)
         self.reward_model.save(model_save_dir, self.step)
 
@@ -862,3 +832,4 @@ def main(cfg):
 
 if __name__ == '__main__':
     main()
+
