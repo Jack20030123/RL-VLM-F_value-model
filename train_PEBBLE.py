@@ -256,7 +256,7 @@ class Workspace(object):
                         try:
                             gamma_v = float(self.cfg.agent.params.discount)
                         except Exception:
-                            gamma_v = 1
+                            gamma_v = 0.99
 
                         if rgb_image is None:
                             reward_hat = 0.0
