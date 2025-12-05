@@ -14,13 +14,14 @@ class SawyerDoorEnvV2(SawyerXYZEnv):
     def __init__(self, tasks=None, render_mode=None):
         hand_low = (-0.5, 0.40, 0.05)
         hand_high = (0.5, 1, 0.5)
-        # obj_low = (0.0, 0.85, 0.15)
-        # obj_high = (0.1, 0.95, 0.15)
+        obj_low = (0.0, 0.85, 0.15)
+        obj_high = (0.1, 0.95, 0.15)
         goal_low = (-0.3, 0.4, 0.1499)
         goal_high = (-0.2, 0.5, 0.1501)
 
-        obj_low = (0.0, 0.85, 0.15)
-        obj_high = (0.0, 0.85, 0.15)
+        # Fixed: obj_low and obj_high were the same (range was 0)
+        # obj_low = (0.0, 0.85, 0.15)
+        # obj_high = (0.0, 0.85, 0.15)
 
         super().__init__(
             self.model_name,

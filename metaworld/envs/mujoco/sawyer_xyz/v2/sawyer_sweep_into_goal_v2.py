@@ -16,13 +16,14 @@ class SawyerSweepIntoGoalEnvV2(SawyerXYZEnv):
     def __init__(self, tasks=None, render_mode=None):
         hand_low = (-0.5, 0.40, 0.05)
         hand_high = (0.5, 1, 0.5)
-        # obj_low = (-0.1, 0.6, 0.02)
-        # obj_high = (0.1, 0.7, 0.02)
+        obj_low = (-0.1, 0.6, 0.02)
+        obj_high = (0.1, 0.7, 0.02)
         goal_low = (-0.001, 0.8399, 0.0199)
         goal_high = (+0.001, 0.8401, 0.0201)
 
-        obj_low = (0, 0.65, 0.02)
-        obj_high = (0, 0.65, 0.02)
+        # Fixed: obj_low and obj_high were the same (range was 0)
+        # obj_low = (0, 0.65, 0.02)
+        # obj_high = (0, 0.65, 0.02)
 
         super().__init__(
             self.model_name,

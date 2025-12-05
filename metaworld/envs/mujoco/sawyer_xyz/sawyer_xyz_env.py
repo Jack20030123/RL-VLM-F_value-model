@@ -523,7 +523,7 @@ class SawyerXYZEnv(SawyerMocapBase, EzPickle):
 
     def reset(self, seed=None, options=None):
         self.curr_path_length = 0
-        obs, info = super().reset()
+        obs, info = super().reset(seed=seed, options=options)
         self._prev_obs = obs[:18].copy()
         obs[18:36] = self._prev_obs
         obs = np.float64(obs)
@@ -544,7 +544,7 @@ class SawyerXYZEnv(SawyerMocapBase, EzPickle):
             assert self._last_rand_vec is not None
             return self._last_rand_vec
         else:
-            rand_vec = np.random.uniform(
+            rand_vec = self.np_random.uniform(
                 self._random_reset_space.low,
                 self._random_reset_space.high,
                 size=self._random_reset_space.low.size,

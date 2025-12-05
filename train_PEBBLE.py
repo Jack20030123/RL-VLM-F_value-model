@@ -39,6 +39,7 @@ class Workspace(object):
             agent=cfg.agent.name)
 
         utils.set_seed_everywhere(cfg.seed)
+        self.episode_rng = np.random.RandomState(cfg.seed)
         self.device = torch.device(cfg.device)
         self.log_success = False
 
@@ -203,7 +204,15 @@ class Workspace(object):
         for episode in range(self.cfg.num_eval_episodes):
             print("evaluating episode {}".format(episode))
             images = []
-            obs = self.env.reset()
+            eval_seed = self.episode_rng.randint(400, 500)
+            np.random.seed(eval_seed)
+            # Use new gym API: pass seed to reset()
+            try:
+                obs = self.env.reset(seed=eval_seed)
+            except TypeError:
+                # Fallback for old gym versions
+                self.env.seed(eval_seed)
+                obs = self.env.reset()
             if "metaworld" in self.cfg.env:
                 obs = obs[0]
 
@@ -459,6 +468,12 @@ class Workspace(object):
         avg_train_true_return = deque([], maxlen=10)
         start_time = time.time()
 
+        # Track success history for the last 100 episodes
+        success_history = deque(maxlen=100)
+        # Track all success rates computed every 100 episodes
+        success_rate_history = []
+        episode_checkpoints = []
+
         interact_count = 0
         reward_learning_acc = 0
         vlm_acc = 0
@@ -482,6 +497,19 @@ class Workspace(object):
                     if self.log_success:
                         self.total_success_episodes += int(episode_success)  # episode_success ∈ {0,1}
                         self.logger.log('train/total_success_episodes', self.total_success_episodes, self.step)
+
+                        # Track success history
+                        success_history.append(int(episode_success))
+
+                        # Every 100 episodes, compute and log success rate
+                        if episode > 0 and episode % 100 == 0:
+                            # Calculate success rate for last 100 episodes
+                            current_success_rate = (sum(success_history) / len(success_history)) * 100.0
+
+                            # Log to wandb (wandb will automatically create plots)
+                            wandb.log({
+                                "train/success_rate_per_100ep": current_success_rate,
+                            }, step=self.step)
 
                     start_time = time.time()
 
@@ -518,8 +546,15 @@ class Workspace(object):
                         train_metrics["train/total_success_episodes"] = self.total_success_episodes
                     wandb.log(train_metrics, step=self.step)
 
-                # Reset for next episode
-                obs = self.env.reset()
+                train_seed = self.episode_rng.randint(0, 400)
+                np.random.seed(train_seed)
+                # Use new gym API: pass seed to reset()
+                try:
+                    obs = self.env.reset(seed=train_seed)
+                except TypeError:
+                    # Fallback for old gym versions
+                    self.env.seed(train_seed)
+                    obs = self.env.reset()
                 if "metaworld" in self.cfg.env:
                     obs = obs[0]
                 self.agent.reset()
