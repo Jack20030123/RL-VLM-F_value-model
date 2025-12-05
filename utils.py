@@ -48,7 +48,7 @@ def make_metaworld_env(cfg):
         env_cls = _env_dict.ALL_V1_ENVIRONMENTS[env_name]
     
     env = env_cls(render_mode='rgb_array')
-    env.camera_name = env_name #"corner2" 
+    env.camera_name = "corner2" #env_name 
     
     env._freeze_rand_vec = False
     env._set_task_called = True
