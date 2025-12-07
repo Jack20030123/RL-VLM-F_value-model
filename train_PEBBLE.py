@@ -388,7 +388,6 @@ class Workspace(object):
         average_true_episode_reward /= self.cfg.num_eval_episodes
         if self.log_success:
             success_rate /= self.cfg.num_eval_episodes
-            success_rate *= 100.0
 
         self.logger.log('eval/episode_reward', average_episode_reward, self.step)
         self.logger.log('eval/true_episode_reward', average_true_episode_reward, self.step)
@@ -504,7 +503,7 @@ class Workspace(object):
                         # Every 100 episodes, compute and log success rate
                         if episode > 0 and episode % 100 == 0:
                             # Calculate success rate for last 100 episodes
-                            current_success_rate = (sum(success_history) / len(success_history)) * 100.0
+                            current_success_rate = sum(success_history) / len(success_history)
 
                             # Log to wandb (wandb will automatically create plots)
                             wandb.log({
