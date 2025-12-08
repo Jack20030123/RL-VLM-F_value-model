@@ -5,9 +5,10 @@ clip_env_prompts = {
     "metaworld_drawer-open-v2": "The drawer is opened.", # let's try the flipped version.
     "metaworld_door-open-v2": "The safe door is opened.", # let's try the flipped version.
     "metaworld_soccer-v2": "The soccer ball is in the goal.", # not solved, there is reward issue
+    "metaworld_window-close-v2": "The window is closed.",
 
     "CartPole-v1": "pole vertically upright on top of the cart.",
-    
+
     "softgym_RopeFlattenEasy": "The blue rope is straightened.",
     "softgym_PassWater": "The container, which holds water, is as close to the red circle as possible without causing too many water droplets to spill.",
     "softgym_ClothFoldDiagonal": "The cloth is folded diagonally from top left corner to bottom right corner.",
@@ -19,6 +20,7 @@ goal_env_prompts = {
     "metaworld_drawer-open-v2": "to open the drawer", # let's try the flipped version.
     "metaworld_door-open-v2": "to open the safe door", # let's try the flipped version.
     "metaworld_soccer-v2": "to move the soccer ball into the goal", # not solved, there is reward issue
+    "metaworld_window-close-v2": "to close the window",
     "CartPole-v1": "to balance the brown pole on the black cart to be upright",
     "softgym_RopeFlattenEasy": "to straighten the blue rope",
     "softgym_PassWater": "to move the container, which holds water, to be as close to the red circle as possible without causing too many water droplets to spill",
