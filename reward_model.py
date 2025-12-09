@@ -17,8 +17,12 @@ from prompt import (
     gemini_free_query_prompt1, gemini_free_query_prompt2,
     gemini_single_query_env_prompts,
     gpt_free_query_env_prompts, gpt_summary_env_prompts,
+    qwen_free_query_env_prompts, qwen_summary_env_prompts,
+    qwen_free_query_prompt1, qwen_free_query_prompt2,
+    qwen_single_query_env_prompts,
 )
 from vlms.gemini_infer import gemini_query_2, gemini_query_1
+from vlms.qwen_infer import qwen_query_2, qwen_query_1
 from conv_net import CNN, fanin_init
 
 device = 'cuda'
@@ -769,6 +773,73 @@ class RewardModel:
 
                     s1 = float(blip2_image_text_matching(img1, prompt))
                     s2 = float(blip2_image_text_matching(img2, prompt))
+
+                    if useful_indices[i] == 0:
+                        res = -1
+                    else:
+                        if abs(s1 - s2) < 1e-6:
+                            res = -1
+                        else:
+                            res = 0 if s1 > s2 else 1
+                    vlm_labels.append(res)
+
+            # ----------- ✅ Qwen single-stage prompt (no cost, local via HTTP) -----------
+            elif self.vlm == 'qwen_single_prompt':
+                vlm_labels = []
+                for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
+                    res = qwen_query_1([
+                        qwen_free_query_prompt1,
+                        Image.fromarray(img1),
+                        qwen_free_query_prompt2,
+                        Image.fromarray(img2),
+                        qwen_single_query_env_prompts[self.env_name],
+                    ])
+                    try:
+                        if "-1" in str(res):
+                            res = -1
+                        elif "0" in str(res):
+                            res = 0
+                        elif "1" in str(res):
+                            res = 1
+                        else:
+                            res = -1
+                    except:
+                        res = -1
+                    vlm_labels.append(res)
+
+            # ----------- ✅ Qwen two-stage prompt (no cost, local via HTTP) -----------
+            elif self.vlm == "qwen_free_form":
+                vlm_labels = []
+                for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
+                    res = qwen_query_2(
+                            [
+                                qwen_free_query_prompt1,
+                                Image.fromarray(img1),
+                                qwen_free_query_prompt2,
+                                Image.fromarray(img2),
+                                qwen_free_query_env_prompts[self.env_name]
+                    ],
+                                qwen_summary_env_prompts[self.env_name]
+                    )
+                    try:
+                        res = int(res)
+                        if res not in [0, 1, -1]:
+                            res = -1
+                    except:
+                        res = -1
+                    vlm_labels.append(res)
+
+            # ----------- ✅ Qwen local scoring (no cost, local via HTTP) -----------
+            elif self.vlm in ["qwen", "qwen_local"]:
+                from vlms.qwen_infer import qwen_image_text_matching
+                vlm_labels = []
+                prompt = self.clip_prompt
+                for i in range(self.mb_size):
+                    img1 = img_t_1[i]
+                    img2 = img_t_2[i]
+
+                    s1 = float(qwen_image_text_matching(img1, prompt))
+                    s2 = float(qwen_image_text_matching(img2, prompt))
 
                     if useful_indices[i] == 0:
                         res = -1

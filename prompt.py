@@ -148,3 +148,42 @@ gpt_score_summary_env_prompts = {}
 gpt_score_summary_template = copy.deepcopy(gemini_score_summary_template)
 for env_name, prompt in goal_env_prompts.items():
     gpt_score_summary_env_prompts[env_name] = gpt_score_summary_template.format(prompt, "{}")
+
+
+##########################################################################
+### Qwen uses the same prompt template as gemini and gpt ###############
+##########################################################################
+
+# Qwen free-form query prompts (for two-stage analysis)
+qwen_free_query_prompt1 = gemini_free_query_prompt1  # "Consider the following two images:\nImage 1:"
+qwen_free_query_prompt2 = gemini_free_query_prompt2  # "Image 2:"
+
+qwen_free_query_env_prompts = {}
+qwen_free_query_template = copy.deepcopy(gemini_free_query_template)
+for env_name, prompt in goal_env_prompts.items():
+    qwen_free_query_env_prompts[env_name] = qwen_free_query_template.format(prompt)
+
+# Qwen summary prompts (for two-stage extraction)
+qwen_summary_env_prompts = {}
+qwen_summary_template = copy.deepcopy(gemini_summary_template)
+for env_name, prompt in goal_env_prompts.items():
+    qwen_summary_env_prompts[env_name] = qwen_summary_template.format(prompt, "{}")
+
+# Qwen single query prompts (for one-stage analysis)
+qwen_single_query_env_prompts = {}
+qwen_single_query_prompt_template = copy.deepcopy(gemini_single_query_prompt_template)
+for env_name, prompt in goal_env_prompts.items():
+    qwen_single_query_env_prompts[env_name] = qwen_single_query_prompt_template.format(prompt)
+
+# Qwen score prompts (for direct reward scoring)
+qwen_score_prompt_start = gemini_score_prompt_start  # "Consider the following image:"
+
+qwen_score_env_prompts = {}
+qwen_score_template = copy.deepcopy(gemini_score_template)
+for env_name, prompt in goal_env_prompts.items():
+    qwen_score_env_prompts[env_name] = qwen_score_template.format(prompt)
+
+qwen_score_summary_env_prompts = {}
+qwen_score_summary_template = copy.deepcopy(gemini_score_summary_template)
+for env_name, prompt in goal_env_prompts.items():
+    qwen_score_summary_env_prompts[env_name] = qwen_score_summary_template.format(prompt, "{}")

@@ -19,6 +19,7 @@ from PIL import Image
 
 from vlms.blip_infer_2 import blip2_image_text_matching
 from vlms.clip_infer import clip_infer_score as clip_image_text_matching
+from vlms.qwen_infer import qwen_image_text_matching
 import cv2
 import wandb
 
@@ -312,6 +313,13 @@ class Workspace(object):
                     query_image = rgb_image
                     query_prompt = clip_env_prompts[self.cfg.env]
                     reward_hat = clip_image_text_matching(query_image, query_prompt) * 2 - 1
+                    if self.cfg.flip_vlm_label:
+                        reward_hat = -reward_hat
+
+                elif self.reward == 'qwen_image_text_matching':
+                    query_image = rgb_image
+                    query_prompt = clip_env_prompts[self.cfg.env]
+                    reward_hat = qwen_image_text_matching(query_image, query_prompt) * 2 - 1
                     if self.cfg.flip_vlm_label:
                         reward_hat = -reward_hat
 
@@ -683,7 +691,7 @@ class Workspace(object):
             ep_info.append(extra)
 
             # Capture image if needed
-            if self.cfg.vlm_label or self.reward in ['blip2_image_text_matching', 'clip_image_text_matching'] or \
+            if self.cfg.vlm_label or self.reward in ['blip2_image_text_matching', 'clip_image_text_matching', 'qwen_image_text_matching'] or \
                (self.cfg.image_reward and self.reward not in ["gt_task_reward", "sparse_task_reward"]):
                 if "metaworld" in self.cfg.env:
                     rgb_image = self.env.render()
@@ -774,6 +782,13 @@ class Workspace(object):
                 query_image = rgb_image
                 query_prompt = clip_env_prompts[self.cfg.env]
                 reward_hat = clip_image_text_matching(query_image, query_prompt) * 2 - 1
+                if self.cfg.flip_vlm_label:
+                    reward_hat = -reward_hat
+
+            elif self.reward == 'qwen_image_text_matching':
+                query_image = rgb_image
+                query_prompt = clip_env_prompts[self.cfg.env]
+                reward_hat = qwen_image_text_matching(query_image, query_prompt) * 2 - 1
                 if self.cfg.flip_vlm_label:
                     reward_hat = -reward_hat
 
