@@ -6,21 +6,24 @@
 # The server must be running before starting rlvlmf training with Qwen VLM.
 #
 # Usage:
-#   ./start_qwen_server.sh [--preload] [--port PORT] [--model MODEL]
+#   ./start_qwen_server.sh [--preload] [--host HOST] [--port PORT] [--model MODEL]
 #
 # Options:
 #   --preload      Preload the model at startup (recommended, takes ~200s for 8B, ~400s for 32B)
+#   --host HOST    Host to bind (default: 127.0.0.1)
+#                  For cross-node, use 0.0.0.0
 #   --port PORT    Port number (default: 8000)
 #   --model MODEL  Model name: 8B or 32B (default: 8B)
 #                  8B = Qwen/Qwen3-VL-8B-Instruct
 #                  32B = Qwen/Qwen3-VL-32B-Instruct
 #
 # Examples:
-#   ./start_qwen_server.sh --preload --port 8000 --model 8B
-#   ./start_qwen_server.sh --preload --port 8000 --model 32B
+#   ./start_qwen_server.sh --preload --host 127.0.0.1 --port 8000 --model 8B
+#   ./start_qwen_server.sh --preload --host 0.0.0.0   --port 8000 --model 32B
 #
 
 # Default values
+HOST="127.0.0.1"
 PORT=8000
 PRELOAD=""
 MODEL="8B"
@@ -42,7 +45,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--preload] [--port PORT] [--model MODEL]"
+            echo "Usage: $0 [--preload] [--host HOST] [--port PORT] [--model MODEL]"
             exit 1
             ;;
     esac
@@ -65,6 +68,7 @@ esac
 echo "=================================================="
 echo "Starting Qwen3-VL HTTP Inference Server"
 echo "=================================================="
+echo "Host: $HOST"
 echo "Port: $PORT"
 echo "Model: $MODEL_FULL"
 echo "Preload model: ${PRELOAD:-no}"
@@ -106,4 +110,4 @@ echo "Logging to: $LOG_FILE"
 echo ""
 
 # Start the server and redirect output to log file
-python vlms/servers/qwen_server.py --host 127.0.0.1 --port $PORT --model "$MODEL_FULL" $PRELOAD 2>&1 | tee "$LOG_FILE"
+python vlms/servers/qwen_server.py --host "$HOST" --port $PORT --model "$MODEL_FULL" $PRELOAD 2>&1 | tee "$LOG_FILE"
