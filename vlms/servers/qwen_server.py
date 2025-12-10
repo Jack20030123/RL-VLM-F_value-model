@@ -39,6 +39,11 @@ app = Flask(__name__)
 # Debug mode (set QWEN_DEBUG=1 environment variable to enable debug logging)
 DEBUG = os.environ.get('QWEN_DEBUG', '0') == '1'
 
+# Model selection (set QWEN_MODEL environment variable or use --model argument)
+# Default: Qwen3-VL-8B-Instruct
+# Options: Qwen/Qwen3-VL-8B-Instruct, Qwen/Qwen3-VL-32B-Instruct
+MODEL_NAME = os.environ.get('QWEN_MODEL', 'Qwen/Qwen3-VL-8B-Instruct')
+
 # Global variables for model (lazy loading)
 model = None
 processor = None
@@ -49,24 +54,26 @@ def init_model():
     global model, processor
     if model is None:
         print("=" * 60)
-        print("Loading Qwen3-VL-8B-Instruct model...")
+        print(f"Loading {MODEL_NAME} model...")
         print("=" * 60)
         from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 
-        # Load model with automatic device management
-        # device_map="auto" will offload some parameters to CPU if GPU memory is insufficient
-        # This is necessary for 8GB GPUs (model needs ~8-9GB in bfloat16)
+        # Load model to single GPU (no CPU offload)
+        # device_map={"": 0} forces model onto first visible GPU (set by CUDA_VISIBLE_DEVICES)
+        # For 8B model: needs ~9GB GPU memory
+        # For 32B model: needs ~70GB GPU memory (requires A100 80GB)
+        # Will fail with OOM if GPU memory insufficient (better than slow CPU offload)
         model = Qwen3VLForConditionalGeneration.from_pretrained(
-            "Qwen/Qwen3-VL-8B-Instruct",
+            MODEL_NAME,
             torch_dtype=torch.bfloat16,  # Use bfloat16 to reduce memory usage
-            device_map="auto",  # Auto manage device placement (GPU + CPU offload)
+            device_map={"": 0},  # Force entire model onto first visible GPU
             low_cpu_mem_usage=True,  # Reduce CPU memory usage during loading
         )
 
         processor = AutoProcessor.from_pretrained(
-            "Qwen/Qwen3-VL-8B-Instruct"
+            MODEL_NAME
         )
-        print("✓ Qwen3-VL model loaded successfully!")
+        print(f"✓ {MODEL_NAME} loaded successfully!")
         print("=" * 60)
 
 def decode_base64_image(base64_str):
@@ -90,7 +97,7 @@ def extract_number(text, default=0.5):
     except:
         return default
 
-def extract_preference(text, debug=True):
+def extract_preference(text, debug=False):
     """Extract preference label (0, 1, or -1) from text response
 
     Args:
@@ -163,6 +170,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'model_loaded': model is not None,
+        'model_name': MODEL_NAME,
         'device': str(device)
     })
 
@@ -353,16 +361,17 @@ Image 1:"""
             generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0]
 
-        print("\n" + "=" * 60)
-        print("PREFERENCE ONE-STAGE - FULL MODEL RESPONSE:")
-        print("=" * 60)
-        print(response.strip())
-        print("=" * 60)
-        print(f"Extracting from last line: {response.strip().split(chr(10))[-1]}")
-        print("=" * 60 + "\n")
+        if DEBUG:
+            print("\n" + "=" * 60)
+            print("PREFERENCE ONE-STAGE - FULL MODEL RESPONSE:")
+            print("=" * 60)
+            print(response.strip())
+            print("=" * 60)
+            print(f"Extracting from last line: {response.strip().split(chr(10))[-1]}")
+            print("=" * 60 + "\n")
 
         # Extract preference from last line (similar to gemini_query_1)
-        preference = extract_preference(response.strip().split("\n")[-1], debug=True)
+        preference = extract_preference(response.strip().split("\n")[-1], debug=DEBUG)
 
         end = time.time()
 
@@ -460,11 +469,12 @@ Image 1:"""
             generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0]
 
-        print("\n" + "=" * 60)
-        print("PREFERENCE TWO-STAGE (ANALYZE) - FULL MODEL RESPONSE:")
-        print("=" * 60)
-        print(analysis.strip())
-        print("=" * 60 + "\n")
+        if DEBUG:
+            print("\n" + "=" * 60)
+            print("PREFERENCE TWO-STAGE (ANALYZE) - FULL MODEL RESPONSE:")
+            print("=" * 60)
+            print(analysis.strip())
+            print("=" * 60 + "\n")
 
         end = time.time()
 
@@ -551,16 +561,17 @@ def preference_two_stage_extract():
             generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0]
 
-        print("\n" + "=" * 60)
-        print("PREFERENCE TWO-STAGE (EXTRACT) - FULL MODEL RESPONSE:")
-        print("=" * 60)
-        print(response.strip())
-        print("=" * 60)
-        print(f"Extracting from first line: {response.strip().split(chr(10))[0]}")
-        print("=" * 60 + "\n")
+        if DEBUG:
+            print("\n" + "=" * 60)
+            print("PREFERENCE TWO-STAGE (EXTRACT) - FULL MODEL RESPONSE:")
+            print("=" * 60)
+            print(response.strip())
+            print("=" * 60)
+            print(f"Extracting from first line: {response.strip().split(chr(10))[0]}")
+            print("=" * 60 + "\n")
 
         # Extract preference from first line (similar to gemini_query_2)
-        preference = extract_preference(response.strip().split("\n")[0], debug=True)
+        preference = extract_preference(response.strip().split("\n")[0], debug=DEBUG)
 
         end = time.time()
 
@@ -581,8 +592,17 @@ if __name__ == '__main__':
     parser.add_argument('--host', type=str, default='127.0.0.1', help='Host to bind to')
     parser.add_argument('--port', type=int, default=8000, help='Port to bind to')
     parser.add_argument('--preload', action='store_true', help='Preload model at startup')
+    parser.add_argument('--model', type=str, default=None,
+                        help='Model name (e.g., Qwen/Qwen3-VL-8B-Instruct or Qwen/Qwen3-VL-32B-Instruct). Overrides QWEN_MODEL env var.')
 
     args = parser.parse_args()
+
+    # Override MODEL_NAME if --model is specified
+    if args.model:
+        MODEL_NAME = args.model
+        print(f"Using model from command line: {args.model}")
+    else:
+        print(f"Using model: {MODEL_NAME} (from QWEN_MODEL env var or default)")
 
     # Optionally preload model
     if args.preload:
@@ -594,6 +614,8 @@ if __name__ == '__main__':
     print(f"{'=' * 60}")
     print(f"Host: {args.host}")
     print(f"Port: {args.port}")
+    print(f"Model: {MODEL_NAME}")
+    print(f"Debug: {'ON' if DEBUG else 'OFF'}")
     print(f"Endpoints:")
     print(f"  - POST /score (single image scoring)")
     print(f"  - POST /preference_one_stage (one-stage preference)")

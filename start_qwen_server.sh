@@ -6,19 +6,24 @@
 # The server must be running before starting rlvlmf training with Qwen VLM.
 #
 # Usage:
-#   ./start_qwen_server.sh [--preload] [--port PORT]
+#   ./start_qwen_server.sh [--preload] [--port PORT] [--model MODEL]
 #
 # Options:
-#   --preload    Preload the model at startup (recommended, takes ~200s)
-#   --port PORT  Port number (default: 8000)
+#   --preload      Preload the model at startup (recommended, takes ~200s for 8B, ~400s for 32B)
+#   --port PORT    Port number (default: 8000)
+#   --model MODEL  Model name: 8B or 32B (default: 8B)
+#                  8B = Qwen/Qwen3-VL-8B-Instruct
+#                  32B = Qwen/Qwen3-VL-32B-Instruct
 #
-# Example:
-#   ./start_qwen_server.sh --preload --port 8000
+# Examples:
+#   ./start_qwen_server.sh --preload --port 8000 --model 8B
+#   ./start_qwen_server.sh --preload --port 8000 --model 32B
 #
 
 # Default values
 PORT=8000
 PRELOAD=""
+MODEL="8B"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -31,18 +36,37 @@ while [[ $# -gt 0 ]]; do
             PORT="$2"
             shift 2
             ;;
+        --model)
+            MODEL="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--preload] [--port PORT]"
+            echo "Usage: $0 [--preload] [--port PORT] [--model MODEL]"
             exit 1
             ;;
     esac
 done
 
+# Convert short model name to full HuggingFace model name
+case $MODEL in
+    8B|8b)
+        MODEL_FULL="Qwen/Qwen3-VL-8B-Instruct"
+        ;;
+    32B|32b)
+        MODEL_FULL="Qwen/Qwen3-VL-32B-Instruct"
+        ;;
+    *)
+        # Assume it's already a full model name (e.g., Qwen/Qwen3-VL-8B-Instruct)
+        MODEL_FULL="$MODEL"
+        ;;
+esac
+
 echo "=================================================="
 echo "Starting Qwen3-VL HTTP Inference Server"
 echo "=================================================="
 echo "Port: $PORT"
+echo "Model: $MODEL_FULL"
 echo "Preload model: ${PRELOAD:-no}"
 echo "=================================================="
 echo ""
@@ -82,4 +106,4 @@ echo "Logging to: $LOG_FILE"
 echo ""
 
 # Start the server and redirect output to log file
-python vlms/servers/qwen_server.py --host 127.0.0.1 --port $PORT $PRELOAD 2>&1 | tee "$LOG_FILE"
+python vlms/servers/qwen_server.py --host 127.0.0.1 --port $PORT --model "$MODEL_FULL" $PRELOAD 2>&1 | tee "$LOG_FILE"
