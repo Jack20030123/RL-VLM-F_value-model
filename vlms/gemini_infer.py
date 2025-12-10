@@ -10,8 +10,10 @@ import numpy as np
 
 genai.configure(api_key=os.environ['GEMINI_API_KEY'])
 
-model = genai.GenerativeModel('gemini-pro-vision')
-text_model = genai.GenerativeModel('gemini-pro')
+# Updated to use gemini-flash-latest (best free tier quota available)
+# This automatically uses the latest flash model with vision + text support
+model = genai.GenerativeModel('gemini-flash-latest')
+text_model = genai.GenerativeModel('gemini-flash-latest')
 
         
 def gemini_query_1(query_list, temperature=0):
@@ -50,7 +52,7 @@ def gemini_query_1(query_list, temperature=0):
             )
 
             response.resolve()
-            success = True    
+            success = True
         except:
             print("gemini retrying...")
             time.sleep(3)
@@ -129,7 +131,7 @@ def gemini_query_2(query_list, summary_prompt, temperature=0):
                     ]
             )
             summary_response.resolve()
-            success = True    
+            success = True
         except:
             print("gemini retrying...")
             time.sleep(2)

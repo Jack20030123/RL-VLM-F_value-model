@@ -170,8 +170,23 @@ for env_name, prompt in goal_env_prompts.items():
     qwen_summary_env_prompts[env_name] = qwen_summary_template.format(prompt, "{}")
 
 # Qwen single query prompts (for one-stage analysis)
+# Using improved prompt to reduce excessive -1 responses
+qwen_single_query_prompt_template = """
+1. What is shown in Image 1?
+2. What is shown in Image 2?
+3. The goal is {}. Which image shows MORE progress toward this goal, even if the difference is small?
+
+IMPORTANT: Even small differences matter. You must choose one unless the images are absolutely identical.
+
+Reply with a single number:
+- 0 if Image 1 shows more progress (even slightly better)
+- 1 if Image 2 shows more progress (even slightly better)
+- -1 ONLY if the images are completely identical or you cannot see any difference at all
+
+Your answer (single number only):
+"""
+
 qwen_single_query_env_prompts = {}
-qwen_single_query_prompt_template = copy.deepcopy(gemini_single_query_prompt_template)
 for env_name, prompt in goal_env_prompts.items():
     qwen_single_query_env_prompts[env_name] = qwen_single_query_prompt_template.format(prompt)
 

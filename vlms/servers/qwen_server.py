@@ -87,20 +87,71 @@ def extract_number(text, default=0.5):
     except:
         return default
 
-def extract_preference(text):
-    """Extract preference label (0, 1, or -1) from text response"""
+def extract_preference(text, debug=True):
+    """Extract preference label (0, 1, or -1) from text response
+
+    Args:
+        text: Response text from the model
+        debug: If True, print the full response for debugging
+
+    Returns:
+        Preference label: 0, 1, or -1
+    """
     try:
         text = text.strip()
-        # Look for -1, 0, 1 in the response
-        if "-1" in text:
+
+        # Debug: Print the full response
+        if debug:
+            print("=" * 60)
+            print("QWEN FULL RESPONSE:")
+            print("-" * 60)
+            print(text)
+            print("-" * 60)
+
+        # Try to find standalone numbers using regex
+        # This matches -1, 0, or 1 as standalone tokens (not part of "Image 1", etc.)
+        import re
+
+        # Pattern 1: Find exact matches like "Answer: 1" or just "1" on a line
+        # Look for -1, 0, or 1 that are not preceded/followed by word characters or digits
+        pattern = r'(?:^|[^\w\d])(-1|0|1)(?:[^\w\d]|$)'
+        matches = re.findall(pattern, text)
+
+        if matches:
+            # Return the last match (most likely to be the final answer)
+            result = int(matches[-1])
+            if debug:
+                print(f"✓ Extracted preference: {result} (from matches: {matches})")
+                print("=" * 60)
+            return result
+
+        # Pattern 2: Fallback - look for these exact strings as complete words
+        # Check in reverse order of specificity
+        if re.search(r'\b-1\b', text):
+            if debug:
+                print("✓ Extracted preference: -1 (fallback method)")
+                print("=" * 60)
             return -1
-        elif "0" in text:
+        elif re.search(r'\b0\b', text):
+            if debug:
+                print("✓ Extracted preference: 0 (fallback method)")
+                print("=" * 60)
             return 0
-        elif "1" in text:
+        elif re.search(r'\b1\b', text):
+            if debug:
+                print("✓ Extracted preference: 1 (fallback method)")
+                print("=" * 60)
             return 1
         else:
+            # If no clear answer found, return -1 (uncertain)
+            if debug:
+                print(f"⚠ WARNING: Could not extract preference!")
+                print(f"Returning -1 (uncertain)")
+                print("=" * 60)
             return -1
-    except:
+    except Exception as e:
+        print(f"❌ ERROR extracting preference: {e}")
+        print("=" * 60)
         return -1
 
 @app.route('/health', methods=['GET'])
@@ -291,8 +342,16 @@ Image 1:"""
             generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0]
 
+        print("\n" + "=" * 60)
+        print("PREFERENCE ONE-STAGE - FULL MODEL RESPONSE:")
+        print("=" * 60)
+        print(response.strip())
+        print("=" * 60)
+        print(f"Extracting from last line: {response.strip().split(chr(10))[-1]}")
+        print("=" * 60 + "\n")
+
         # Extract preference from last line (similar to gemini_query_1)
-        preference = extract_preference(response.strip().split("\n")[-1])
+        preference = extract_preference(response.strip().split("\n")[-1], debug=True)
 
         end = time.time()
 
@@ -390,6 +449,12 @@ Image 1:"""
             generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0]
 
+        print("\n" + "=" * 60)
+        print("PREFERENCE TWO-STAGE (ANALYZE) - FULL MODEL RESPONSE:")
+        print("=" * 60)
+        print(analysis.strip())
+        print("=" * 60 + "\n")
+
         end = time.time()
 
         return jsonify({
@@ -475,8 +540,16 @@ def preference_two_stage_extract():
             generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )[0]
 
+        print("\n" + "=" * 60)
+        print("PREFERENCE TWO-STAGE (EXTRACT) - FULL MODEL RESPONSE:")
+        print("=" * 60)
+        print(response.strip())
+        print("=" * 60)
+        print(f"Extracting from first line: {response.strip().split(chr(10))[0]}")
+        print("=" * 60 + "\n")
+
         # Extract preference from first line (similar to gemini_query_2)
-        preference = extract_preference(response.strip().split("\n")[0])
+        preference = extract_preference(response.strip().split("\n")[0], debug=True)
 
         end = time.time()
 
