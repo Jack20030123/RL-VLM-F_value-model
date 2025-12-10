@@ -299,6 +299,13 @@ def preference_one_stage():
         full_prompt = f"""Consider the following two images:
 Image 1:"""
 
+        # DEBUG: Print the actual prompt being sent
+        print("\n" + "=" * 60)
+        print("DEBUG: PROMPT SENT TO MODEL:")
+        print("=" * 60)
+        print(prompt)
+        print("=" * 60 + "\n")
+
         messages = [
             {
                 "role": "user",
