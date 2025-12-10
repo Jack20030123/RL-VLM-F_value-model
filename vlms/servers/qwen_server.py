@@ -36,6 +36,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 app = Flask(__name__)
 
+# Debug mode (set QWEN_DEBUG=1 environment variable to enable debug logging)
+DEBUG = os.environ.get('QWEN_DEBUG', '0') == '1'
+
 # Global variables for model (lazy loading)
 model = None
 processor = None
@@ -299,12 +302,13 @@ def preference_one_stage():
         full_prompt = f"""Consider the following two images:
 Image 1:"""
 
-        # DEBUG: Print the actual prompt being sent
-        print("\n" + "=" * 60)
-        print("DEBUG: PROMPT SENT TO MODEL:")
-        print("=" * 60)
-        print(prompt)
-        print("=" * 60 + "\n")
+        # DEBUG: Print the actual prompt being sent (only if QWEN_DEBUG=1)
+        if DEBUG:
+            print("\n" + "=" * 60)
+            print("DEBUG: PROMPT SENT TO MODEL:")
+            print("=" * 60)
+            print(prompt)
+            print("=" * 60 + "\n")
 
         messages = [
             {

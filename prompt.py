@@ -170,18 +170,25 @@ for env_name, prompt in goal_env_prompts.items():
     qwen_summary_env_prompts[env_name] = qwen_summary_template.format(prompt, "{}")
 
 # Qwen single query prompts (for one-stage analysis)
-# Using improved prompt to reduce excessive -1 responses
+# Using stricter prompt to further reduce excessive -1 responses
 qwen_single_query_prompt_template = """
 1. What is shown in Image 1?
 2. What is shown in Image 2?
-3. The goal is {}. Which image shows MORE progress toward this goal, even if the difference is small?
+3. The goal is {}. Which image shows MORE progress toward this goal?
 
-IMPORTANT: Even small differences matter. You must choose one unless the images are absolutely identical.
+CRITICAL INSTRUCTIONS:
+- You MUST make a choice between Image 1 and Image 2
+- Even the SMALLEST difference in position, distance, or progress matters
+- If you can detect ANY difference at all, you must choose the better one
+- Reply -1 ONLY in these extreme cases:
+  * The images are pixel-perfect identical, OR
+  * Both images show exactly zero progress toward the goal in exactly the same way
+- If one image shows even 1% more progress, choose that one
 
 Reply with a single number:
-- 0 if Image 1 shows more progress (even slightly better)
-- 1 if Image 2 shows more progress (even slightly better)
-- -1 ONLY if the images are completely identical or you cannot see any difference at all
+- 0 if Image 1 shows more progress (even slightly)
+- 1 if Image 2 shows more progress (even slightly)
+- -1 ONLY if truly no difference exists
 
 Your answer (single number only):
 """
