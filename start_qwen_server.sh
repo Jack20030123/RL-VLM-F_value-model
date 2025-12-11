@@ -35,6 +35,10 @@ while [[ $# -gt 0 ]]; do
             PRELOAD="--preload"
             shift
             ;;
+        --host)
+            HOST="$2"
+            shift 2
+            ;;
         --port)
             PORT="$2"
             shift 2
