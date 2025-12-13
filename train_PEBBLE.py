@@ -164,23 +164,6 @@ class Workspace(object):
         # Switches and target network for value-difference reward
         self.use_value_diff_reward = bool(getattr(cfg, "use_value_diff_reward", False))
 
-        # Robust null handling for value_target_sync_every:
-        # - baseline: you don't need to pass it
-        # - value_diff: if not passed / None / "None", default to 1000
-        raw_sync = getattr(cfg, "value_target_sync_every", None)
-
-        def _is_null(v):
-            if v is None:
-                return True
-            if isinstance(v, str) and v.lower() in ["none", "null", "~", ""]:
-                return True
-            return False
-
-        if _is_null(raw_sync):
-            self.value_target_sync_every = 1000
-        else:
-            self.value_target_sync_every = int(raw_sync)
-
         if self.use_value_diff_reward:
             # A frozen copy to stabilize V(s) used for r_t = γ V(s_t) − V(s_{t-1})
             self.value_target = copy.deepcopy(self.reward_model)
@@ -553,6 +536,12 @@ class Workspace(object):
                         train_metrics["train/total_success_episodes"] = self.total_success_episodes
                     wandb.log(train_metrics, step=self.step)
 
+                # Update value_target at episode boundary (every episode)
+                if self.use_value_diff_reward:
+                    self.value_target = copy.deepcopy(self.reward_model)
+                    self.value_target.eval()
+                    print(f"[Episode {episode}] Updated value_target at step {self.step}")
+
                 train_seed = self.episode_rng.randint(0, 400)
                 np.random.seed(train_seed)
                 # Use new gym API: pass seed to reset()
@@ -741,21 +730,18 @@ class Workspace(object):
                             self.value_target.eval()
                             v_tm1 = float(self.value_target.r_hat(prev_img))
                             v_t = float(self.value_target.r_hat(curr_img))
-                            reward_hat = gamma_v * v_t - v_tm1
+
+                            # Special handling for episode step 0 to avoid initial state randomness
+                            if episode_step == 0:
+                                reward_hat = 0.0  # Set first step reward to 0
+                            else:
+                                reward_hat = gamma_v * v_t - v_tm1
 
                         # Update previous-frame cache with current raw rgb
                         prev_rgb_image = rgb_image
 
-                        # Periodic target sync (only if sync_every > 0)
-                        if (self.value_target_sync_every is not None) and (self.value_target_sync_every > 0):
-                            if self.step > 0 and (self.step % self.value_target_sync_every == 0):
-                                # Rebuild frozen target from current reward model
-                                if self.value_target is not None:
-                                    del self.value_target
-                                if torch.cuda.is_available():
-                                    torch.cuda.empty_cache()
-                                self.value_target = copy.deepcopy(self.reward_model)
-                                self.value_target.eval()
+                        # NOTE: value_target update moved to episode boundary (see done branch)
+                        # Original step-level update logic commented out to avoid mid-episode updates
                 else:
                     # Original path: treat reward_model output as immediate reward
                     if not self.cfg.image_reward:
@@ -881,4 +867,3 @@ def main(cfg):
 
 if __name__ == '__main__':
     main()
-

@@ -158,6 +158,7 @@ class RewardModel:
                 conv_kernel_sizes=[5, 3, 3 ,3],
                 conv_n_channels=[16, 32, 64, 128],
                 conv_strides=[3, 2, 2, 2],
+                debug=False,
                 **kwargs
                 ):
 
@@ -242,6 +243,7 @@ class RewardModel:
         self.flip_vlm_label = flip_vlm_label
         self.train_times = 0
         self.save_query_interval = save_query_interval
+        self.debug = debug
 
         # -------- cached VLM preference labels (robust null handling) --------
         self.read_cache_idx = 0
@@ -679,12 +681,33 @@ class RewardModel:
                 else:
                     useful_indices.append(1)
 
+            # ===================== Always create combined_images directory =====================
+            combined_save_path = os.path.join(save_path, "combined_images")
+            if not os.path.exists(combined_save_path):
+                os.makedirs(combined_save_path)
+
+            # Only print debug info if debug is enabled
+            if self.debug:
+                print(f"[DEBUG VLM] Saving combined images to: {combined_save_path}")
+                print(f"[DEBUG VLM] VLM type: {self.vlm}")
+                print(f"[DEBUG VLM] Number of image pairs: {len(img_t_1)}")
+
             # ===================== VLM labels (no cache) =====================
             if self.vlm == 'gpt4v_two_image':
                 from vlms.gpt4_infer import gpt4v_infer_2
                 vlm_labels = []
+                if self.debug:
+                    print(f"[DEBUG GPT4V] Query prompt: {gpt_free_query_env_prompts[self.env_name]}")
+                    print(f"[DEBUG GPT4V] Summary prompt: {gpt_summary_env_prompts[self.env_name]}")
                 for idx, (img_path_1, img_path_2) in enumerate(gpt_two_image_paths):
-                    print("querying vlm {}/{}".format(idx, len(gpt_two_image_paths)))
+                    # Always save combined image
+                    combined_path = os.path.join(combined_save_path, f"gpt4v_query_{idx:03d}_combined.png")
+                    combined_img = np.concatenate([img_t_1[idx], img_t_2[idx]], axis=1)
+                    Image.fromarray(combined_img).save(combined_path)
+
+                    if self.debug:
+                        print("querying vlm {}/{}".format(idx, len(gpt_two_image_paths)))
+
                     query_prompt = gpt_free_query_env_prompts[self.env_name]
                     summary_prompt = gpt_summary_env_prompts[self.env_name]
                     res = gpt4v_infer_2(query_prompt, summary_prompt, img_path_1, img_path_2)
@@ -694,12 +717,22 @@ class RewardModel:
                             label_res = -1
                     except:
                         label_res = -1
+
+                    if self.debug:
+                        print(f"[DEBUG GPT4V] Query {idx}: raw_response={res}, label={label_res}")
                     vlm_labels.append(label_res)
                     time.sleep(0.1)
 
             elif self.vlm == 'gemini_single_prompt':
                 vlm_labels = []
+                if self.debug:
+                    print(f"[DEBUG GEMINI] Prompt: {gemini_single_query_env_prompts[self.env_name]}")
                 for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
+                    # Always save combined image
+                    combined_path = os.path.join(combined_save_path, f"gemini_single_{idx:03d}_combined.png")
+                    combined_img = np.concatenate([img1, img2], axis=1)
+                    Image.fromarray(combined_img).save(combined_path)
+
                     res = gemini_query_1([
                         gemini_free_query_prompt1,
                         Image.fromarray(img1),
@@ -718,11 +751,22 @@ class RewardModel:
                             res = -1
                     except:
                         res = -1
+
+                    if self.debug:
+                        print(f"[DEBUG GEMINI] Query {idx}: label={res}")
                     vlm_labels.append(res)
 
             elif self.vlm == "gemini_free_form":
                 vlm_labels = []
+                if self.debug:
+                    print(f"[DEBUG GEMINI FF] Query prompt: {gemini_free_query_env_prompts[self.env_name]}")
+                    print(f"[DEBUG GEMINI FF] Summary prompt: {gemini_summary_env_prompts[self.env_name]}")
                 for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
+                    # Always save combined image
+                    combined_path = os.path.join(combined_save_path, f"gemini_ff_{idx:03d}_combined.png")
+                    combined_img = np.concatenate([img1, img2], axis=1)
+                    Image.fromarray(combined_img).save(combined_path)
+
                     res = gemini_query_2(
                             [
                                 gemini_free_query_prompt1,
@@ -739,6 +783,9 @@ class RewardModel:
                             res = -1
                     except:
                         res = -1
+
+                    if self.debug:
+                        print(f"[DEBUG GEMINI FF] Query {idx}: label={res}")
                     vlm_labels.append(res)
 
             # ----------- ✅ local CLIP branch (no cost) -----------
@@ -746,9 +793,16 @@ class RewardModel:
                 from vlms.clip_infer import clip_infer_score as clip_image_text_matching
                 vlm_labels = []
                 prompt = self.clip_prompt
+                if self.debug:
+                    print(f"[DEBUG CLIP] Prompt: {prompt}")
                 for i in range(self.mb_size):
                     img1 = img_t_1[i]
                     img2 = img_t_2[i]
+
+                    # Always save combined image
+                    combined_path = os.path.join(combined_save_path, f"clip_query_{i:03d}_combined.png")
+                    combined_img = np.concatenate([img1, img2], axis=1)
+                    Image.fromarray(combined_img).save(combined_path)
 
                     s1 = float(clip_image_text_matching(img1, prompt))
                     s2 = float(clip_image_text_matching(img2, prompt))
@@ -760,6 +814,9 @@ class RewardModel:
                             res = -1
                         else:
                             res = 0 if s1 > s2 else 1
+
+                    if self.debug:
+                        print(f"[DEBUG CLIP] Query {i}: img1_score={s1:.4f}, img2_score={s2:.4f}, diff={abs(s1-s2):.4f}, label={res}")
                     vlm_labels.append(res)
 
             # ----------- ✅ local BLIP2 branch (no cost) -----------
@@ -767,9 +824,16 @@ class RewardModel:
                 from vlms.blip_infer_2 import blip2_image_text_matching
                 vlm_labels = []
                 prompt = self.clip_prompt
+                if self.debug:
+                    print(f"[DEBUG BLIP2] Prompt: {prompt}")
                 for i in range(self.mb_size):
                     img1 = img_t_1[i]
                     img2 = img_t_2[i]
+
+                    # Always save combined image
+                    combined_path = os.path.join(combined_save_path, f"blip2_query_{i:03d}_combined.png")
+                    combined_img = np.concatenate([img1, img2], axis=1)
+                    Image.fromarray(combined_img).save(combined_path)
 
                     s1 = float(blip2_image_text_matching(img1, prompt))
                     s2 = float(blip2_image_text_matching(img2, prompt))
@@ -781,12 +845,22 @@ class RewardModel:
                             res = -1
                         else:
                             res = 0 if s1 > s2 else 1
+
+                    if self.debug:
+                        print(f"[DEBUG BLIP2] Query {i}: img1_score={s1:.4f}, img2_score={s2:.4f}, diff={abs(s1-s2):.4f}, label={res}")
                     vlm_labels.append(res)
 
             # ----------- ✅ Qwen single-stage prompt (no cost, local via HTTP) -----------
             elif self.vlm == 'qwen_single_prompt':
                 vlm_labels = []
+                if self.debug:
+                    print(f"[DEBUG QWEN SP] Prompt: {qwen_single_query_env_prompts[self.env_name]}")
                 for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
+                    # Always save combined image
+                    combined_path = os.path.join(combined_save_path, f"qwen_sp_{idx:03d}_combined.png")
+                    combined_img = np.concatenate([img1, img2], axis=1)
+                    Image.fromarray(combined_img).save(combined_path)
+
                     res = qwen_query_1([
                         qwen_free_query_prompt1,
                         Image.fromarray(img1),
@@ -805,12 +879,23 @@ class RewardModel:
                             res = -1
                     except:
                         res = -1
+
+                    if self.debug:
+                        print(f"[DEBUG QWEN SP] Query {idx}: label={res}")
                     vlm_labels.append(res)
 
             # ----------- ✅ Qwen two-stage prompt (no cost, local via HTTP) -----------
             elif self.vlm == "qwen_free_form":
                 vlm_labels = []
+                if self.debug:
+                    print(f"[DEBUG QWEN FF] Query prompt: {qwen_free_query_env_prompts[self.env_name]}")
+                    print(f"[DEBUG QWEN FF] Summary prompt: {qwen_summary_env_prompts[self.env_name]}")
                 for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
+                    # Always save combined image
+                    combined_path = os.path.join(combined_save_path, f"qwen_ff_{idx:03d}_combined.png")
+                    combined_img = np.concatenate([img1, img2], axis=1)
+                    Image.fromarray(combined_img).save(combined_path)
+
                     res = qwen_query_2(
                             [
                                 qwen_free_query_prompt1,
@@ -827,6 +912,9 @@ class RewardModel:
                             res = -1
                     except:
                         res = -1
+
+                    if self.debug:
+                        print(f"[DEBUG QWEN FF] Query {idx}: label={res}")
                     vlm_labels.append(res)
 
             # ----------- ✅ Qwen local scoring (no cost, local via HTTP) -----------
@@ -834,9 +922,16 @@ class RewardModel:
                 from vlms.qwen_infer import qwen_image_text_matching
                 vlm_labels = []
                 prompt = self.clip_prompt
+                if self.debug:
+                    print(f"[DEBUG QWEN] Prompt: {prompt}")
                 for i in range(self.mb_size):
                     img1 = img_t_1[i]
                     img2 = img_t_2[i]
+
+                    # Always save combined image
+                    combined_path = os.path.join(combined_save_path, f"qwen_query_{i:03d}_combined.png")
+                    combined_img = np.concatenate([img1, img2], axis=1)
+                    Image.fromarray(combined_img).save(combined_path)
 
                     s1 = float(qwen_image_text_matching(img1, prompt))
                     s2 = float(qwen_image_text_matching(img2, prompt))
@@ -848,6 +943,9 @@ class RewardModel:
                             res = -1
                         else:
                             res = 0 if s1 > s2 else 1
+
+                    if self.debug:
+                        print(f"[DEBUG QWEN] Query {i}: img1_score={s1:.4f}, img2_score={s2:.4f}, diff={abs(s1-s2):.4f}, label={res}")
                     vlm_labels.append(res)
 
             # ----------- safe fallback -----------
