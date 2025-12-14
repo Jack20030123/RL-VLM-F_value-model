@@ -212,11 +212,11 @@ class Workspace(object):
         )
 
         # Create episode recorder
-        record_freq = getattr(cfg, 'video_record_frequency', 1)
-        max_videos = getattr(cfg, 'max_videos_keep', 2000)
+        record_freq = cfg.video_record_frequency
+        max_videos = cfg.max_videos_keep
 
-        # VIDEO: Get save-success-only setting (default: True)
-        self.save_env_reward_video_success_only = getattr(cfg, 'save_env_reward_video_success_only', True)
+        # VIDEO: Get save-success-only setting
+        self.save_env_reward_video_success_only = cfg.save_env_reward_video_success_only
 
         self.episode_recorder = EpisodeRecorder(
             visualizer=self.video_visualizer,
