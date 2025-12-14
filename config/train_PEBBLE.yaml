@@ -46,7 +46,7 @@ save_interval: ${num_interact}
 # video recorder
 save_video: false
 # Save combined video (env frames + reward_hat plot) - only for successfully completed episodes
-save_env_reward_video_success_only: false
+save_env_reward_video_success_only: true
 
 # setups
 seed: 1
