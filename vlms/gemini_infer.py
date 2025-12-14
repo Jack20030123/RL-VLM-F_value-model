@@ -10,10 +10,10 @@ import numpy as np
 
 genai.configure(api_key=os.environ['GEMINI_API_KEY'])
 
-# Updated to use gemini-flash-latest (best free tier quota available)
-# This automatically uses the latest flash model with vision + text support
-model = genai.GenerativeModel('gemini-flash-latest')
-text_model = genai.GenerativeModel('gemini-flash-latest')
+# Updated to use gemini-2.5-flash-lite (fastest and lowest cost model)
+# Gemini 2.5 Flash Lite: $0.10 input per 1M, $0.40 output per 1M
+model = genai.GenerativeModel('gemini-2.5-flash-lite')
+text_model = genai.GenerativeModel('gemini-2.5-flash-lite')
 
         
 def gemini_query_1(query_list, temperature=0):
