@@ -20,6 +20,9 @@
       <camera name="sweep-into-v2" mode="fixed" pos="-0.6 0.2 0.35" xyaxes="-1 1 0 -0.2 -0.2 -1"/>
       <camera name="drawer-open-v2" mode="fixed" pos="-0.6 0.2 0.35" xyaxes="-1 1 0 -0.2 -0.2 -1"/>
       <camera name="door-close-v2" fovy="60" mode="fixed" pos="0.7 0.35 0.6" euler="3.9 2.3 0.6"/>
+      
+      # TODO: Window-close camera is temporarily aligned with the existing `corner2` view for consistency.
+      <camera name="window-close-v2" fovy="60" mode="fixed" pos="1.3 -0.2 1.1" euler="3.9 2.3 0.6"/>
 
       <body name="base" childclass="xyz_base" pos="0 0 0">
           <site name="basesite" pos="0 0 0" size="0.01" />

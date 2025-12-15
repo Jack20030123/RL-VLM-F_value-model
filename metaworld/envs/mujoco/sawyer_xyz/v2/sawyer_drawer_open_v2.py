@@ -14,12 +14,12 @@ class SawyerDrawerOpenEnvV2(SawyerXYZEnv):
     def __init__(self, tasks=None, render_mode=None):
         hand_low = (-0.5, 0.40, 0.05)
         hand_high = (0.5, 1, 0.5)
-        # obj_low = (-0.1, 0.9, 0.0)
-        # obj_high = (0.1, 0.9, 0.0)
+        obj_low = (-0.1, 0.9, 0.0)
+        obj_high = (0.1, 0.9, 0.0)
         
         
-        obj_low = (0, 0.9, 0.0)
-        obj_high = (0, 0.9, 0.0)
+        #obj_low = (0, 0.9, 0.0)
+        #obj_high = (0, 0.9, 0.0)
 
         super().__init__(
             self.model_name,

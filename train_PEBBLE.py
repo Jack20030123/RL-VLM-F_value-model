@@ -150,6 +150,7 @@ class Workspace(object):
             conv_kernel_sizes=cfg.conv_kernel_sizes,
             conv_strides=cfg.conv_strides,
             conv_n_channels=cfg.conv_n_channels,
+            debug=cfg.vlm_debug,
         )
 
         # Optional model loading

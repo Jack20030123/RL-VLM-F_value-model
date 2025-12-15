@@ -62,6 +62,7 @@ gradient_update: 1
 # vlm label
 vlm_label: 0
 vlm: bard
+vlm_debug: false
 flip_vlm_label: 0
 sum_segment_score: false
 collect_data_interval: 0

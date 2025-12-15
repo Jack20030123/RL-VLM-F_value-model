@@ -739,7 +739,11 @@ class RewardModel:
                         gemini_free_query_prompt2,
                         Image.fromarray(img2),
                         gemini_single_query_env_prompts[self.env_name],
-                    ])
+                    ], debug=self.debug)
+
+                    if self.debug:
+                        print(f"[DEBUG GEMINI] Query {idx}: raw_response='{res}'")
+
                     try:
                         if "-1" in res:
                             res = -1
@@ -753,7 +757,7 @@ class RewardModel:
                         res = -1
 
                     if self.debug:
-                        print(f"[DEBUG GEMINI] Query {idx}: label={res}")
+                        print(f"[DEBUG GEMINI] Query {idx}: parsed_label={res}")
                     vlm_labels.append(res)
 
             elif self.vlm == "gemini_free_form":
@@ -775,7 +779,8 @@ class RewardModel:
                                 Image.fromarray(img2),
                                 gemini_free_query_env_prompts[self.env_name]
                     ],
-                                gemini_summary_env_prompts[self.env_name]
+                                gemini_summary_env_prompts[self.env_name],
+                                debug=self.debug
                     )
                     try:
                         res = int(res)

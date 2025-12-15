@@ -73,6 +73,7 @@ class Workspace(object):
             self.env = utils.make_classic_control_env(cfg)
         elif 'softgym' in cfg.env:
             self.env = utils.make_softgym_env(cfg)
+            self.log_success = True  # Enable success tracking for softgym
         else:
             self.env = utils.make_env(cfg)
 
@@ -167,6 +168,7 @@ class Workspace(object):
             conv_kernel_sizes=cfg.conv_kernel_sizes,
             conv_strides=cfg.conv_strides,
             conv_n_channels=cfg.conv_n_channels,
+            debug=cfg.vlm_debug,
         )
 
         # Optional model loading

@@ -217,7 +217,6 @@ env_arg_dict = {
         'use_cached_states': True,
         'deterministic': True,
         'picker_radius': 0.0001,
-        'horizon': 1,
         "recording": True
     }
 }
