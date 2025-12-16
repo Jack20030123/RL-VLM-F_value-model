@@ -356,10 +356,10 @@ class RewardModel:
                 if img is not None:
                     self.img_inputs.append([])
             else: # clothfold env has is only a 1 step MDP
-                self.inputs.append([flat_input])
-                self.targets.append([flat_target])
+                self.inputs.append(flat_input)
+                self.targets.append(flat_target)
                 if img is not None:
-                    self.img_inputs.append([flat_img])
+                    self.img_inputs.append(flat_img)
 
                 # FIFO
                 if len(self.inputs) > self.max_size:
