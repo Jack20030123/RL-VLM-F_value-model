@@ -47,7 +47,10 @@ def make_metaworld_env(cfg):
     else:
         env_cls = _env_dict.ALL_V1_ENVIRONMENTS[env_name]
 
-    env = env_cls(render_mode='rgb_array')
+    # Get random_init setting from config (default: False)
+    random_init = getattr(cfg, 'metaworld_random_init', False)
+
+    env = env_cls(render_mode='rgb_array', random_init=random_init)
     env.camera_name = env_name
 
     env._freeze_rand_vec = False

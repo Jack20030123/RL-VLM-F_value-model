@@ -58,6 +58,8 @@ seed: 1
 # Environment
 env: dog_stand
 gradient_update: 1
+# Metaworld random initialization (false=fixed position, true=random position)
+metaworld_random_init: false
 
 # vlm label
 vlm_label: 0
