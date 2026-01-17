@@ -431,11 +431,13 @@ class RewardModel:
         # the network parameterizes r hat in eqn 1 from the paper
         return self.ensemble[member](torch.from_numpy(x).float().to(device))
 
-    def r_hat(self, x):
+    def r_hat(self, x, return_members=False):
         r_hats = []
         for member in range(self.de):
             r_hats.append(self.r_hat_member(x, member=member).detach().cpu().numpy())
         r_hats = np.array(r_hats)
+        if return_members:
+            return np.mean(r_hats), r_hats
         return np.mean(r_hats)
 
     def r_hat_batch(self, x):

@@ -187,6 +187,8 @@ class Workspace(object):
             # A frozen copy to stabilize V(s) used for r_t = γ V(s_t) − V(s_{t-1})
             self.value_target = copy.deepcopy(self.reward_model)
             self.value_target.eval()
+            # Flag to track if reward_model has been updated since last value_target sync
+            self.reward_model_updated = False
         else:
             self.value_target = None
 
@@ -608,10 +610,11 @@ class Workspace(object):
                         train_metrics["train/total_success_episodes"] = self.total_success_episodes
                     wandb.log(train_metrics, step=self.step)
 
-                # Update value_target at episode boundary (every episode)
-                if self.use_value_diff_reward:
+                # Update value_target at episode boundary (only when reward_model has been updated)
+                if self.use_value_diff_reward and self.reward_model_updated:
                     self.value_target = copy.deepcopy(self.reward_model)
                     self.value_target.eval()
+                    self.reward_model_updated = False
                     print(f"[Episode {episode}] Updated value_target at step {self.step}")
 
                 train_seed = self.episode_rng.randint(0, 400)
@@ -639,6 +642,10 @@ class Workspace(object):
 
                 traj_images = []
                 ep_info = []
+
+                # Debug variables for reward_hat anomaly detection
+                prev_obj_to_target = None
+                prev_reward_hat = None
 
                 # VIDEO: Start new episode recording
                 self.episode_recorder.start_episode()
@@ -691,6 +698,8 @@ class Workspace(object):
 
                     # First preference learning
                     reward_learning_acc, vlm_acc = self.learn_reward(first_flag=1)
+                    if self.use_value_diff_reward:
+                        self.reward_model_updated = True
 
                     # Relabel replay with the updated model
                     self.reward_model.eval()
@@ -732,6 +741,8 @@ class Workspace(object):
                             self.reward_model.set_batch(self.cfg.max_feedback - self.total_feedback)
 
                         reward_learning_acc, vlm_acc = self.learn_reward()
+                        if self.use_value_diff_reward:
+                            self.reward_model_updated = True
                         self.reward_model.eval()
                         self.replay_buffer.relabel_with_predictor(self.reward_model)
                         self.reward_model.train()
@@ -821,15 +832,36 @@ class Workspace(object):
                     # Original path: treat reward_model output as immediate reward
                     if not self.cfg.image_reward:
                         self.reward_model.eval()
-                        reward_hat = self.reward_model.r_hat(np.concatenate([obs, action], axis=-1))
+                        if getattr(self.cfg, 'reward_hat_debug', False):
+                            reward_hat, r_hats_each = self.reward_model.r_hat(
+                                np.concatenate([obs, action], axis=-1), return_members=True)
+                        else:
+                            reward_hat = self.reward_model.r_hat(np.concatenate([obs, action], axis=-1))
                         self.reward_model.train()
                     else:
                         image = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
                         image = image[:, ::self.resize_factor, ::self.resize_factor]
                         image = image.reshape(1, 3, image.shape[1], image.shape[2])
                         self.reward_model.eval()
-                        reward_hat = self.reward_model.r_hat(image)
+                        if getattr(self.cfg, 'reward_hat_debug', False):
+                            reward_hat, r_hats_each = self.reward_model.r_hat(image, return_members=True)
+                        else:
+                            reward_hat = self.reward_model.r_hat(image)
                         self.reward_model.train()
+
+                    # Debug: detect anomaly where drawer opened more but reward_hat dropped
+                    if getattr(self.cfg, 'reward_hat_debug', False) and 'obj_to_target' in extra:
+                        curr_obj_to_target = extra['obj_to_target']
+                        if prev_obj_to_target is not None and prev_reward_hat is not None:
+                            opened_more = curr_obj_to_target < prev_obj_to_target - 0.001
+                            reward_dropped = reward_hat < prev_reward_hat - 0.1
+                            if opened_more and reward_dropped:
+                                print(f"[ANOMALY] Step {self.step}: "
+                                      f"obj_to_target {prev_obj_to_target:.4f} -> {curr_obj_to_target:.4f}, "
+                                      f"reward_hat {prev_reward_hat:.3f} -> {reward_hat:.3f}, "
+                                      f"members={r_hats_each.flatten()}")
+                        prev_obj_to_target = curr_obj_to_target
+                        prev_reward_hat = reward_hat
 
             elif self.reward == 'blip2_image_text_matching':
                 query_image = rgb_image

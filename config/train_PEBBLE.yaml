@@ -65,6 +65,8 @@ metaworld_random_init: false
 vlm_label: 0
 vlm: bard
 vlm_debug: false
+# debug for reward_hat anomaly detection (opened more but reward_hat dropped)
+reward_hat_debug: true
 flip_vlm_label: 0
 sum_segment_score: false
 collect_data_interval: 0
