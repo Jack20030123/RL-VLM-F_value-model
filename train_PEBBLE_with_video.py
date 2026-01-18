@@ -644,8 +644,10 @@ class Workspace(object):
                 ep_info = []
 
                 # Debug variables for reward_hat anomaly detection
+                prev_step = None
                 prev_obj_to_target = None
                 prev_reward_hat = None
+                prev_members = None
 
                 # VIDEO: Start new episode recording
                 self.episode_recorder.start_episode()
@@ -849,19 +851,37 @@ class Workspace(object):
                             reward_hat = self.reward_model.r_hat(image)
                         self.reward_model.train()
 
-                    # Debug: detect anomaly where drawer opened more but reward_hat dropped
+                    # Debug: detect anomalies in reward_hat
                     if getattr(self.cfg, 'reward_hat_debug', False) and 'obj_to_target' in extra:
                         curr_obj_to_target = extra['obj_to_target']
+                        curr_members = r_hats_each.flatten()
+
+                        # Always print episode step 0 info
+                        if episode_step == 0:
+                            print(f"[EPISODE START] Step {self.step}: obj_to_target={curr_obj_to_target:.4f}, reward_hat={reward_hat:.3f}, members={curr_members}")
+
+                        # Detect anomalies (only after step 0)
                         if prev_obj_to_target is not None and prev_reward_hat is not None:
-                            opened_more = curr_obj_to_target < prev_obj_to_target - 0.001
-                            reward_dropped = reward_hat < prev_reward_hat - 0.1
-                            if opened_more and reward_dropped:
-                                print(f"[ANOMALY] Step {self.step}: "
-                                      f"obj_to_target {prev_obj_to_target:.4f} -> {curr_obj_to_target:.4f}, "
-                                      f"reward_hat {prev_reward_hat:.3f} -> {reward_hat:.3f}, "
-                                      f"members={r_hats_each.flatten()}")
+                            obj_threshold = 0.001  # minimum change in obj_to_target to be considered movement
+                            reward_threshold = 0.05  # minimum change in reward_hat to be considered significant
+
+                            # Case 1: opened more (obj_to_target decreased) but reward dropped
+                            opened_more = curr_obj_to_target < prev_obj_to_target - obj_threshold
+                            reward_dropped = reward_hat < prev_reward_hat - reward_threshold
+                            # Case 2: opened less (obj_to_target increased) but reward increased
+                            opened_less = curr_obj_to_target > prev_obj_to_target + obj_threshold
+                            reward_increased = reward_hat > prev_reward_hat + reward_threshold
+
+                            if (opened_more and reward_dropped) or (opened_less and reward_increased):
+                                anomaly_type = "BETTER->WORSE" if opened_more else "WORSE->BETTER"
+                                print(f"[ANOMALY {anomaly_type}]")
+                                print(f"  Step {prev_step}: obj_to_target={prev_obj_to_target:.4f}, reward_hat={prev_reward_hat:.3f}, members={prev_members}")
+                                print(f"  Step {self.step}: obj_to_target={curr_obj_to_target:.4f}, reward_hat={reward_hat:.3f}, members={curr_members}")
+
+                        prev_step = self.step
                         prev_obj_to_target = curr_obj_to_target
                         prev_reward_hat = reward_hat
+                        prev_members = curr_members
 
             elif self.reward == 'blip2_image_text_matching':
                 query_image = rgb_image
