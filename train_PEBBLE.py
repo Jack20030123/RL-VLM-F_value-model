@@ -572,11 +572,14 @@ class Workspace(object):
                 traj_images = []
                 ep_info = []
 
-                # Debug variables for reward_hat anomaly detection
+                # Debug variables for reward_hat anomaly detection (baseline mode)
                 prev_step = None
                 prev_obj_to_target = None
                 prev_reward_hat = None
                 prev_members = None
+                # Debug variable for value_diff mode
+                if hasattr(self, '_prev_obj_to_target_vdiff'):
+                    del self._prev_obj_to_target_vdiff
 
                 # Capture an initial frame for value-difference reward (train)
                 if self.use_value_diff_reward and self.cfg.image_reward:
@@ -742,14 +745,60 @@ class Workspace(object):
                             prev_img = prev_img.reshape(1, 3, prev_img.shape[1], prev_img.shape[2])
 
                             self.value_target.eval()
-                            v_tm1 = float(self.value_target.r_hat(prev_img))
-                            v_t = float(self.value_target.r_hat(curr_img))
+                            if getattr(self.cfg, 'reward_hat_debug', False):
+                                v_tm1, v_tm1_members = self.value_target.r_hat(prev_img, return_members=True)
+                                v_t, v_t_members = self.value_target.r_hat(curr_img, return_members=True)
+                                v_tm1 = float(v_tm1)
+                                v_t = float(v_t)
+                            else:
+                                v_tm1 = float(self.value_target.r_hat(prev_img))
+                                v_t = float(self.value_target.r_hat(curr_img))
 
                             # Special handling for episode step 0 to avoid initial state randomness
                             if episode_step == 0:
                                 reward_hat = 0.0  # Set first step reward to 0
                             else:
                                 reward_hat = gamma_v * v_t - v_tm1
+
+                            # Debug output for value_diff mode
+                            if getattr(self.cfg, 'reward_hat_debug', False) and 'obj_to_target' in extra:
+                                curr_obj_to_target = extra['obj_to_target']
+                                v_tm1_members_flat = v_tm1_members.flatten()
+                                v_t_members_flat = v_t_members.flatten()
+
+                                # Detect anomalies (for step >= 1)
+                                if episode_step >= 1 and hasattr(self, '_prev_obj_to_target_vdiff'):
+                                    obj_threshold = 0.001  # minimum change to be considered movement
+                                    prev_obj = self._prev_obj_to_target_vdiff
+
+                                    # Print step 1 complete info
+                                    if episode_step == 1:
+                                        print(f"[VALUE_DIFF STEP 1] Step {self.step}")
+                                        print(f"  prev_obj_to_target={prev_obj:.4f} -> curr={curr_obj_to_target:.4f} (delta={curr_obj_to_target - prev_obj:.4f})")
+                                        print(f"  v_tm1={v_tm1:.4f}, v_t={v_t:.4f}, reward_hat={reward_hat:.4f}")
+                                        print(f"  v_tm1_members={v_tm1_members_flat}, v_t_members={v_t_members_flat}")
+
+                                    # opened more = obj_to_target decreased
+                                    opened_more = curr_obj_to_target < prev_obj - obj_threshold
+                                    # opened less = obj_to_target increased
+                                    opened_less = curr_obj_to_target > prev_obj + obj_threshold
+
+                                    # Anomaly: opened more but reward is negative
+                                    if opened_more and reward_hat < 0:
+                                        print(f"[VALUE_DIFF ANOMALY: OPENED_MORE but REWARD<0] Step {self.step}")
+                                        print(f"  prev_obj_to_target={prev_obj:.4f} -> curr={curr_obj_to_target:.4f} (delta={curr_obj_to_target - prev_obj:.4f})")
+                                        print(f"  v_tm1={v_tm1:.4f}, v_t={v_t:.4f}, reward_hat={reward_hat:.4f}")
+                                        print(f"  v_tm1_members={v_tm1_members_flat}, v_t_members={v_t_members_flat}")
+
+                                    # Anomaly: opened less but reward is positive
+                                    if opened_less and reward_hat > 0:
+                                        print(f"[VALUE_DIFF ANOMALY: OPENED_LESS but REWARD>0] Step {self.step}")
+                                        print(f"  prev_obj_to_target={prev_obj:.4f} -> curr={curr_obj_to_target:.4f} (delta={curr_obj_to_target - prev_obj:.4f})")
+                                        print(f"  v_tm1={v_tm1:.4f}, v_t={v_t:.4f}, reward_hat={reward_hat:.4f}")
+                                        print(f"  v_tm1_members={v_tm1_members_flat}, v_t_members={v_t_members_flat}")
+
+                                # Save for next step comparison
+                                self._prev_obj_to_target_vdiff = curr_obj_to_target
 
                         # Update previous-frame cache with current raw rgb
                         prev_rgb_image = rgb_image
