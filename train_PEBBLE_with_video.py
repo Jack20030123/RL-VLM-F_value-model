@@ -106,7 +106,7 @@ class Workspace(object):
         self.image_width = image_width
 
         # Replay buffer capacity (smaller if storing images to control memory)
-        img_capacity = int(getattr(cfg, "image_replay_capacity", 5000))
+        img_capacity = int(getattr(cfg, "image_replay_capacity", 200000))
         cap = int(cfg.replay_buffer_capacity) if not self.cfg.image_reward else img_capacity
         self.replay_buffer = ReplayBuffer(
             self.env.observation_space.shape,
