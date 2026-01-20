@@ -57,7 +57,10 @@ class Workspace(object):
             agent=cfg.agent.name)
 
         utils.set_seed_everywhere(cfg.seed)
-        self.episode_rng = np.random.RandomState(cfg.seed)
+        # Only create episode_rng when metaworld_random_init is True
+        self.metaworld_random_init = getattr(cfg, 'metaworld_random_init', False)
+        if self.metaworld_random_init:
+            self.episode_rng = np.random.RandomState(cfg.seed)
         self.device = torch.device(cfg.device)
         self.log_success = False
 
@@ -252,14 +255,17 @@ class Workspace(object):
         for episode in range(self.cfg.num_eval_episodes):
             print("evaluating episode {}".format(episode))
             images = []
-            eval_seed = self.episode_rng.randint(400, 500)
-            np.random.seed(eval_seed)
-            # Use new gym API: pass seed to reset()
-            try:
-                obs = self.env.reset(seed=eval_seed)
-            except TypeError:
-                # Fallback for old gym versions
-                self.env.seed(eval_seed)
+            if self.metaworld_random_init:
+                # Random seed each episode when metaworld_random_init is True
+                eval_seed = self.episode_rng.randint(400, 500)
+                np.random.seed(eval_seed)
+                try:
+                    obs = self.env.reset(seed=eval_seed)
+                except TypeError:
+                    self.env.seed(eval_seed)
+                    obs = self.env.reset()
+            else:
+                # Natural RNG progression when metaworld_random_init is False
                 obs = self.env.reset()
             if "metaworld" in self.cfg.env:
                 obs = obs[0]
@@ -617,14 +623,17 @@ class Workspace(object):
                     self.reward_model_updated = False
                     print(f"[Episode {episode}] Updated value_target at step {self.step}")
 
-                train_seed = self.episode_rng.randint(0, 400)
-                np.random.seed(train_seed)
-                # Use new gym API: pass seed to reset()
-                try:
-                    obs = self.env.reset(seed=train_seed)
-                except TypeError:
-                    # Fallback for old gym versions
-                    self.env.seed(train_seed)
+                if self.metaworld_random_init:
+                    # Random seed each episode when metaworld_random_init is True
+                    train_seed = self.episode_rng.randint(0, 400)
+                    np.random.seed(train_seed)
+                    try:
+                        obs = self.env.reset(seed=train_seed)
+                    except TypeError:
+                        self.env.seed(train_seed)
+                        obs = self.env.reset()
+                else:
+                    # Natural RNG progression when metaworld_random_init is False
                     obs = self.env.reset()
                 if "metaworld" in self.cfg.env:
                     obs = obs[0]

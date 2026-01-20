@@ -76,7 +76,7 @@ class ReplayBuffer(object):
         if not self.store_image:
             batch_size = 200
         else:
-            batch_size = 32
+            batch_size = 128  # Increased from 32 for faster relabeling (A100 GPU)
         total_iter = int(self.idx/batch_size)
         
         if self.idx > batch_size*total_iter:
