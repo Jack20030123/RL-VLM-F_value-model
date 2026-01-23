@@ -454,6 +454,15 @@ class RewardModel:
                 self.ensemble[member].state_dict(), '%s/reward_model_%s_%s.pt' % (model_dir, step, member)
             )
 
+    def state_dict(self):
+        """Return state dict of all ensemble members (used by value_diff mode only)."""
+        return {f'ensemble_{i}': self.ensemble[i].state_dict() for i in range(self.de)}
+
+    def load_state_dict(self, state_dict):
+        """Load state dict into all ensemble members (used by value_diff mode only)."""
+        for i in range(self.de):
+            self.ensemble[i].load_state_dict(state_dict[f'ensemble_{i}'])
+
     def load(self, model_dir, step):
         file_dir = os.path.dirname(os.path.realpath(__file__))
         model_dir = os.path.join(file_dir, model_dir)

@@ -169,7 +169,7 @@ class Workspace(object):
         self.use_value_diff_reward = bool(getattr(cfg, "use_value_diff_reward", False))
 
         if self.use_value_diff_reward:
-            # A frozen copy to stabilize V(s) used for r_t = γ V(s_t) − V(s_{t-1})
+            # A frozen copy to stabilize V(s) used for r_t = γ V(s_{t+1}) − V(s_t)
             self.value_target = copy.deepcopy(self.reward_model)
             self.value_target.eval()
             # Flag to track if reward_model has been updated since last value_target sync
@@ -221,7 +221,7 @@ class Workspace(object):
             t_idx = 0
 
             # Previous frame buffer for value-difference reward during eval
-            prev_rgb_image = None
+            curr_state_rgb = None
 
             while not done:
                 with utils.eval_mode(self.agent):
@@ -263,24 +263,24 @@ class Workspace(object):
                         if rgb_image is None:
                             reward_hat = 0.0
                         else:
-                            curr_img = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
-                            curr_img = curr_img[:, ::self.resize_factor, ::self.resize_factor]
-                            curr_img = curr_img.reshape(1, 3, curr_img.shape[1], curr_img.shape[2])
+                            next_state_img = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0  # s_{t+1}
+                            next_state_img = next_state_img[:, ::self.resize_factor, ::self.resize_factor]
+                            next_state_img = next_state_img.reshape(1, 3, next_state_img.shape[1], next_state_img.shape[2])
 
-                            if prev_rgb_image is None:
+                            if curr_state_rgb is None:
                                 reward_hat = 0.0
                             else:
-                                prev_img = prev_rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
-                                prev_img = prev_img[:, ::self.resize_factor, ::self.resize_factor]
-                                prev_img = prev_img.reshape(1, 3, prev_img.shape[1], prev_img.shape[2])
+                                curr_state_img = curr_state_rgb.transpose(2, 0, 1).astype(np.float32) / 255.0  # s_t
+                                curr_state_img = curr_state_img[:, ::self.resize_factor, ::self.resize_factor]
+                                curr_state_img = curr_state_img.reshape(1, 3, curr_state_img.shape[1], curr_state_img.shape[2])
 
                                 target_net = self.value_target if self.value_target is not None else self.reward_model
                                 target_net.eval()
-                                v_tm1 = float(target_net.r_hat(prev_img))
-                                v_t = float(target_net.r_hat(curr_img))
-                                reward_hat = gamma_v * v_t - v_tm1
+                                v_curr = float(target_net.r_hat(curr_state_img))   # V(s_t)
+                                v_next = float(target_net.r_hat(next_state_img))   # V(s_{t+1})
+                                reward_hat = gamma_v * v_next - v_curr
 
-                            prev_rgb_image = rgb_image
+                            curr_state_rgb = rgb_image
                     else:
                         if not self.cfg.image_reward:
                             self.reward_model.eval()
@@ -479,7 +479,7 @@ class Workspace(object):
         eval_cnt = 0
 
         # Previous frame buffer for value-difference reward
-        prev_rgb_image = None
+        curr_state_rgb = None
 
         while self.step < self.cfg.num_train_steps:
             if done:
@@ -547,7 +547,8 @@ class Workspace(object):
 
                 # Update value_target at episode boundary (only when reward_model has been updated)
                 if self.use_value_diff_reward and self.reward_model_updated:
-                    self.value_target = copy.deepcopy(self.reward_model)
+                    # Use load_state_dict instead of deepcopy to avoid OOM
+                    self.value_target.load_state_dict(self.reward_model.state_dict())
                     self.value_target.eval()
                     self.reward_model_updated = False
                     print(f"[Episode {episode}] Updated value_target at step {self.step}")
@@ -593,21 +594,21 @@ class Workspace(object):
                 # Capture an initial frame for value-difference reward (train)
                 if self.use_value_diff_reward and self.cfg.image_reward:
                     if "metaworld" in self.cfg.env:
-                        prev_rgb_image = self.env.render()
-                        prev_rgb_image = prev_rgb_image[::-1, :, :]
+                        curr_state_rgb = self.env.render()
+                        curr_state_rgb = curr_state_rgb[::-1, :, :]
                         if "drawer" in self.cfg.env or "sweep" in self.cfg.env:
-                            prev_rgb_image = prev_rgb_image[100:400, 100:400, :]
+                            curr_state_rgb = curr_state_rgb[100:400, 100:400, :]
                     elif self.cfg.env in ["CartPole-v1", "Acrobot-v1", "MountainCar-v0", "Pendulum-v0"]:
-                        prev_rgb_image = self.env.render(mode='rgb_array')
+                        curr_state_rgb = self.env.render(mode='rgb_array')
                     elif 'softgym' in self.cfg.env:
-                        prev_rgb_image = self.env.render(mode='rgb_array', hide_picker=True)
+                        curr_state_rgb = self.env.render(mode='rgb_array', hide_picker=True)
                     else:
-                        prev_rgb_image = self.env.render(mode='rgb_array')
+                        curr_state_rgb = self.env.render(mode='rgb_array')
 
                     if 'Water' not in self.cfg.env and 'Rope' not in self.cfg.env:
-                        prev_rgb_image = cv2.resize(prev_rgb_image, (self.image_height, self.image_width))
+                        curr_state_rgb = cv2.resize(curr_state_rgb, (self.image_height, self.image_width))
                 else:
-                    prev_rgb_image = None
+                    curr_state_rgb = None
 
             # Sample an action
             if self.step < self.cfg.num_seed_steps:
@@ -727,13 +728,13 @@ class Workspace(object):
                 rgb_image = None
 
             # For per-step W&B logging of value-diff internals
-            v_t = np.nan
-            v_tm1 = np.nan
+            v_next = np.nan  # V(s_{t+1})
+            v_curr = np.nan  # V(s_t)
 
             # ===================== reward computation (train) =====================
             if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                 if self.use_value_diff_reward and self.cfg.image_reward:
-                    # Value-difference: r_t = gamma * V(s_t) - V(s_{t-1})
+                    # Value-difference: r_t = gamma * V(s_{t+1}) - V(s_t)
                     try:
                         gamma_v = float(self.cfg.agent.params.discount)
                     except Exception:
@@ -742,38 +743,34 @@ class Workspace(object):
                     if rgb_image is None:
                         reward_hat = 0.0
                     else:
-                        curr_img = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
-                        curr_img = curr_img[:, ::self.resize_factor, ::self.resize_factor]
-                        curr_img = curr_img.reshape(1, 3, curr_img.shape[1], curr_img.shape[2])
+                        next_state_img = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0  # s_{t+1}
+                        next_state_img = next_state_img[:, ::self.resize_factor, ::self.resize_factor]
+                        next_state_img = next_state_img.reshape(1, 3, next_state_img.shape[1], next_state_img.shape[2])
 
-                        if prev_rgb_image is None:
+                        if curr_state_rgb is None:
                             reward_hat = 0.0
                         else:
-                            prev_img = prev_rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
-                            prev_img = prev_img[:, ::self.resize_factor, ::self.resize_factor]
-                            prev_img = prev_img.reshape(1, 3, prev_img.shape[1], prev_img.shape[2])
+                            curr_state_img = curr_state_rgb.transpose(2, 0, 1).astype(np.float32) / 255.0  # s_t
+                            curr_state_img = curr_state_img[:, ::self.resize_factor, ::self.resize_factor]
+                            curr_state_img = curr_state_img.reshape(1, 3, curr_state_img.shape[1], curr_state_img.shape[2])
 
                             self.value_target.eval()
                             if getattr(self.cfg, 'reward_hat_debug', False):
-                                v_tm1, v_tm1_members = self.value_target.r_hat(prev_img, return_members=True)
-                                v_t, v_t_members = self.value_target.r_hat(curr_img, return_members=True)
-                                v_tm1 = float(v_tm1)
-                                v_t = float(v_t)
+                                v_curr, v_curr_members = self.value_target.r_hat(curr_state_img, return_members=True)  # V(s_t)
+                                v_next, v_next_members = self.value_target.r_hat(next_state_img, return_members=True)  # V(s_{t+1})
+                                v_curr = float(v_curr)
+                                v_next = float(v_next)
                             else:
-                                v_tm1 = float(self.value_target.r_hat(prev_img))
-                                v_t = float(self.value_target.r_hat(curr_img))
+                                v_curr = float(self.value_target.r_hat(curr_state_img))   # V(s_t)
+                                v_next = float(self.value_target.r_hat(next_state_img))   # V(s_{t+1})
 
-                            # Special handling for episode step 0 to avoid initial state randomness
-                            if episode_step == 0:
-                                reward_hat = 0.0  # Set first step reward to 0
-                            else:
-                                reward_hat = gamma_v * v_t - v_tm1
+                            reward_hat = gamma_v * v_next - v_curr
 
                             # Debug output for value_diff mode
                             if getattr(self.cfg, 'reward_hat_debug', False) and 'obj_to_target' in extra:
                                 curr_obj_to_target = extra['obj_to_target']
-                                v_tm1_members_flat = v_tm1_members.flatten()
-                                v_t_members_flat = v_t_members.flatten()
+                                v_curr_members_flat = v_curr_members.flatten()
+                                v_next_members_flat = v_next_members.flatten()
 
                                 # Detect anomalies (for step >= 1)
                                 if episode_step >= 1 and hasattr(self, '_prev_obj_to_target_vdiff'):
@@ -784,8 +781,8 @@ class Workspace(object):
                                     if episode_step == 1:
                                         print(f"[VALUE_DIFF STEP 1] Step {self.step}")
                                         print(f"  prev_obj_to_target={prev_obj:.4f} -> curr={curr_obj_to_target:.4f} (delta={curr_obj_to_target - prev_obj:.4f})")
-                                        print(f"  v_tm1={v_tm1:.4f}, v_t={v_t:.4f}, reward_hat={reward_hat:.4f}")
-                                        print(f"  v_tm1_members={v_tm1_members_flat}, v_t_members={v_t_members_flat}")
+                                        print(f"  v_curr={v_curr:.4f}, v_next={v_next:.4f}, reward_hat={reward_hat:.4f}")
+                                        print(f"  v_curr_members={v_curr_members_flat}, v_next_members={v_next_members_flat}")
 
                                     # opened more = obj_to_target decreased
                                     opened_more = curr_obj_to_target < prev_obj - obj_threshold
@@ -796,21 +793,21 @@ class Workspace(object):
                                     if opened_more and reward_hat < 0:
                                         print(f"[VALUE_DIFF ANOMALY: OPENED_MORE but REWARD<0] Step {self.step}")
                                         print(f"  prev_obj_to_target={prev_obj:.4f} -> curr={curr_obj_to_target:.4f} (delta={curr_obj_to_target - prev_obj:.4f})")
-                                        print(f"  v_tm1={v_tm1:.4f}, v_t={v_t:.4f}, reward_hat={reward_hat:.4f}")
-                                        print(f"  v_tm1_members={v_tm1_members_flat}, v_t_members={v_t_members_flat}")
+                                        print(f"  v_curr={v_curr:.4f}, v_next={v_next:.4f}, reward_hat={reward_hat:.4f}")
+                                        print(f"  v_curr_members={v_curr_members_flat}, v_next_members={v_next_members_flat}")
 
                                     # Anomaly: opened less but reward is positive
                                     if opened_less and reward_hat > 0:
                                         print(f"[VALUE_DIFF ANOMALY: OPENED_LESS but REWARD>0] Step {self.step}")
                                         print(f"  prev_obj_to_target={prev_obj:.4f} -> curr={curr_obj_to_target:.4f} (delta={curr_obj_to_target - prev_obj:.4f})")
-                                        print(f"  v_tm1={v_tm1:.4f}, v_t={v_t:.4f}, reward_hat={reward_hat:.4f}")
-                                        print(f"  v_tm1_members={v_tm1_members_flat}, v_t_members={v_t_members_flat}")
+                                        print(f"  v_curr={v_curr:.4f}, v_next={v_next:.4f}, reward_hat={reward_hat:.4f}")
+                                        print(f"  v_curr_members={v_curr_members_flat}, v_next_members={v_next_members_flat}")
 
                                 # Save for next step comparison
                                 self._prev_obj_to_target_vdiff = curr_obj_to_target
 
                         # Update previous-frame cache with current raw rgb
-                        prev_rgb_image = rgb_image
+                        curr_state_rgb = rgb_image
 
                         # NOTE: value_target update moved to episode boundary (see done branch)
                         # Original step-level update logic commented out to avoid mid-episode updates
@@ -905,8 +902,8 @@ class Workspace(object):
                 "train/true_reward": float(reward),      # environment true reward
             }
             if self.use_value_diff_reward and self.cfg.image_reward:
-                log_dict["train/v_t"] = float(v_t)
-                log_dict["train/v_tm1"] = float(v_tm1)
+                log_dict["train/v_next"] = float(v_next)   # V(s_{t+1})
+                log_dict["train/v_curr"] = float(v_curr)   # V(s_t)
             wandb.log(log_dict, step=self.step)
 
             # Allow infinite bootstrap
@@ -954,6 +951,7 @@ class Workspace(object):
 def main(cfg):
 
     wandb.init(
+        entity="haobaizhan2-usc",
         project="rlvlmf",
         name=getattr(cfg, "exp_name", None),
     )
