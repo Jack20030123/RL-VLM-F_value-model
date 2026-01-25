@@ -21,7 +21,7 @@ import pickle as pkl
 import copy  # Used to build a frozen target network for value inference
 
 from logger import Logger
-from replay_buffer import ReplayBuffer
+from replay_buffer import ReplayBuffer, ValueDiffReplayBuffer
 from reward_model import RewardModel
 from reward_model_score import RewardModelScore
 from collections import deque
@@ -108,16 +108,35 @@ class Workspace(object):
         self.image_height = image_height
         self.image_width = image_width
 
+        # Check value_diff mode early (needed for replay buffer selection)
+        self.use_value_diff_reward = bool(getattr(cfg, "use_value_diff_reward", False))
+
         # Replay buffer capacity (smaller if storing images to control memory)
-        img_capacity = int(getattr(cfg, "image_replay_capacity", 200000))
-        cap = int(cfg.replay_buffer_capacity) if not self.cfg.image_reward else img_capacity
-        self.replay_buffer = ReplayBuffer(
-            self.env.observation_space.shape,
-            self.env.action_space.shape,
-            cap,
-            self.device,
-            store_image=self.cfg.image_reward,
-            image_size=image_height)
+        if self.cfg.image_reward:
+            img_capacity = getattr(cfg, "image_replay_capacity", None)
+            cap = int(img_capacity) if img_capacity is not None else 200000
+        else:
+            cap = int(cfg.replay_buffer_capacity)
+
+        # Select replay buffer based on mode
+        if self.use_value_diff_reward and self.cfg.image_reward:
+            # value_diff mode: use ValueDiffReplayBuffer (stores curr & next images)
+            self.replay_buffer = ValueDiffReplayBuffer(
+                self.env.observation_space.shape,
+                self.env.action_space.shape,
+                cap,
+                self.device,
+                image_size=image_height)
+            print(f"[ValueDiff] Using ValueDiffReplayBuffer with capacity={cap}")
+        else:
+            # baseline mode: use original ReplayBuffer
+            self.replay_buffer = ReplayBuffer(
+                self.env.observation_space.shape,
+                self.env.action_space.shape,
+                cap,
+                self.device,
+                store_image=self.cfg.image_reward,
+                image_size=image_height)
 
         # Basic logging counters
         self.total_feedback = 0
@@ -183,9 +202,7 @@ class Workspace(object):
             print("loading agent model at {}".format(self.cfg.agent_model_load_dir))
             self.agent.load(self.cfg.agent_model_load_dir, 1000000)
 
-        # Switches and target network for value-difference reward
-        self.use_value_diff_reward = bool(getattr(cfg, "use_value_diff_reward", False))
-
+        # Target network for value-difference reward (use_value_diff_reward already set above)
         if self.use_value_diff_reward:
             # A frozen copy to stabilize V(s) used for r_t = γ V(s_{t+1}) − V(s_t)
             self.value_target = copy.deepcopy(self.reward_model)
@@ -316,11 +333,6 @@ class Workspace(object):
                 # ===================== reward_hat computation for eval =====================
                 if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                     if self.use_value_diff_reward and self.cfg.image_reward:
-                        try:
-                            gamma_v = float(self.cfg.agent.params.discount)
-                        except Exception:
-                            gamma_v = 0.99
-
                         if rgb_image is None:
                             reward_hat = 0.0
                         else:
@@ -339,7 +351,7 @@ class Workspace(object):
                                 target_net.eval()
                                 v_curr = float(target_net.r_hat(curr_state_img))   # V(s_t)
                                 v_next = float(target_net.r_hat(next_state_img))   # V(s_{t+1})
-                                reward_hat = gamma_v * v_next - v_curr
+                                reward_hat = v_next - v_curr
 
                             curr_state_rgb = rgb_image
                     else:
@@ -808,12 +820,7 @@ class Workspace(object):
             # ===================== reward computation (train) =====================
             if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                 if self.use_value_diff_reward and self.cfg.image_reward:
-                    # Value-difference: r_t = gamma * V(s_{t+1}) - V(s_t)
-                    try:
-                        gamma_v = float(self.cfg.agent.params.discount)
-                    except Exception:
-                        gamma_v = 0.99
-
+                    # Value-difference: r_t = V(s_{t+1}) - V(s_t)
                     if rgb_image is None:
                         reward_hat = 0.0
                     else:
@@ -838,7 +845,7 @@ class Workspace(object):
                                 v_curr = float(self.value_target.r_hat(curr_state_img))   # V(s_t)
                                 v_next = float(self.value_target.r_hat(next_state_img))   # V(s_{t+1})
 
-                            reward_hat = gamma_v * v_next - v_curr
+                            reward_hat = v_next - v_curr
 
                             # Debug output for value_diff mode
                             if getattr(self.cfg, 'reward_hat_debug', False) and 'obj_to_target' in extra:
@@ -1003,9 +1010,17 @@ class Workspace(object):
 
             # Push transition into replay buffer (image/non-image paths)
             if self.cfg.image_reward and self.reward not in ["gt_task_reward", "sparse_task_reward"]:
-                self.replay_buffer.add(
-                    obs, action, reward_hat, next_obs, done, done_no_max,
-                    image=rgb_image[::self.resize_factor, ::self.resize_factor, :])
+                if self.use_value_diff_reward:
+                    # value_diff mode: store both curr_image (s_t) and next_image (s_{t+1})
+                    self.replay_buffer.add(
+                        obs, action, reward_hat, next_obs, done, done_no_max,
+                        curr_image=curr_state_rgb[::self.resize_factor, ::self.resize_factor, :],
+                        next_image=rgb_image[::self.resize_factor, ::self.resize_factor, :])
+                else:
+                    # baseline mode: store only current frame
+                    self.replay_buffer.add(
+                        obs, action, reward_hat, next_obs, done, done_no_max,
+                        image=rgb_image[::self.resize_factor, ::self.resize_factor, :])
             else:
                 self.replay_buffer.add(
                     obs, action, reward_hat, next_obs, done, done_no_max)

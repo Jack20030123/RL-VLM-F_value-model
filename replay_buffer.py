@@ -138,3 +138,140 @@ class ReplayBuffer(object):
         full_obs = torch.as_tensor(full_obs, device=self.device)
         
         return obses, full_obs, actions, rewards, next_obses, not_dones, not_dones_no_max
+
+
+class ValueDiffReplayBuffer(object):
+    """
+    Replay buffer for value_diff mode.
+
+    Key difference from ReplayBuffer:
+    - Stores both curr_image (s_t) and next_image (s_{t+1})
+    - relabel_with_predictor computes V(s_{t+1}) - V(s_t) instead of V(s)
+
+    This ensures semantic consistency between:
+    - Training time: reward_hat = V(s_{t+1}) - V(s_t)
+    - Relabel time:  reward = V(s_{t+1}) - V(s_t)
+    """
+
+    def __init__(self, obs_shape, action_shape, capacity, device, window=1, image_size=300):
+        self.capacity = capacity
+        self.device = device
+        self.image_size = image_size
+
+        # Proprioceptive observations
+        obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
+        self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
+        self.next_obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
+        self.actions = np.empty((capacity, *action_shape), dtype=np.float32)
+        self.rewards = np.empty((capacity, 1), dtype=np.float32)
+        self.not_dones = np.empty((capacity, 1), dtype=np.float32)
+        self.not_dones_no_max = np.empty((capacity, 1), dtype=np.float32)
+        self.window = window
+
+        # Store BOTH curr and next images for value_diff relabeling
+        self.curr_images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
+        self.next_images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
+
+        self.idx = 0
+        self.last_save = 0
+        self.full = False
+
+    def __len__(self):
+        return self.capacity if self.full else self.idx
+
+    def add(self, obs, action, reward, next_obs, done, done_no_max,
+            curr_image=None, next_image=None):
+        """
+        Add a transition with both current and next frame images.
+
+        Args:
+            curr_image: Image at state s_t (before action)
+            next_image: Image at state s_{t+1} (after action)
+        """
+        np.copyto(self.obses[self.idx], obs)
+        np.copyto(self.actions[self.idx], action)
+        np.copyto(self.rewards[self.idx], reward)
+        np.copyto(self.next_obses[self.idx], next_obs)
+        np.copyto(self.not_dones[self.idx], not done)
+        np.copyto(self.not_dones_no_max[self.idx], not done_no_max)
+
+        if curr_image is not None:
+            np.copyto(self.curr_images[self.idx], curr_image)
+        if next_image is not None:
+            np.copyto(self.next_images[self.idx], next_image)
+
+        self.idx = (self.idx + 1) % self.capacity
+        self.full = self.full or self.idx == 0
+
+    def relabel_with_predictor(self, predictor):
+        """
+        Relabel rewards using value difference: reward = V(s_{t+1}) - V(s_t)
+
+        This maintains semantic consistency with training-time reward computation.
+        """
+        batch_size = 128  # For GPU efficiency
+        total_samples = self.capacity if self.full else self.idx
+        total_iter = int(total_samples / batch_size)
+
+        if total_samples > batch_size * total_iter:
+            total_iter += 1
+
+        for index in range(total_iter):
+            start_idx = index * batch_size
+            last_index = min((index + 1) * batch_size, total_samples)
+
+            # Prepare curr_images (s_t)
+            curr_imgs = self.curr_images[start_idx:last_index]
+            curr_imgs = np.transpose(curr_imgs, (0, 3, 1, 2))  # HWC -> CHW
+            curr_imgs = curr_imgs.astype(np.float32) / 255.0
+
+            # Prepare next_images (s_{t+1})
+            next_imgs = self.next_images[start_idx:last_index]
+            next_imgs = np.transpose(next_imgs, (0, 3, 1, 2))  # HWC -> CHW
+            next_imgs = next_imgs.astype(np.float32) / 255.0
+
+            # Compute V(s_t) and V(s_{t+1})
+            v_curr = predictor.r_hat_batch(curr_imgs)  # shape: (batch, 1)
+            v_next = predictor.r_hat_batch(next_imgs)  # shape: (batch, 1)
+
+            # reward = V(s_{t+1}) - V(s_t)
+            pred_reward = v_next - v_curr
+            self.rewards[start_idx:last_index] = pred_reward
+
+        torch.cuda.empty_cache()
+
+    def sample(self, batch_size):
+        """Sample a batch of transitions."""
+        idxs = np.random.randint(
+            0, self.capacity if self.full else self.idx, size=batch_size
+        )
+
+        obses = torch.as_tensor(self.obses[idxs], device=self.device).float()
+        actions = torch.as_tensor(self.actions[idxs], device=self.device)
+        rewards = torch.as_tensor(self.rewards[idxs], device=self.device)
+        next_obses = torch.as_tensor(self.next_obses[idxs], device=self.device).float()
+        not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
+        not_dones_no_max = torch.as_tensor(self.not_dones_no_max[idxs], device=self.device)
+
+        return obses, actions, rewards, next_obses, not_dones, not_dones_no_max
+
+    def sample_state_ent(self, batch_size):
+        """Sample for state entropy computation."""
+        idxs = np.random.randint(
+            0, self.capacity if self.full else self.idx, size=batch_size
+        )
+
+        obses = torch.as_tensor(self.obses[idxs], device=self.device).float()
+        actions = torch.as_tensor(self.actions[idxs], device=self.device)
+        rewards = torch.as_tensor(self.rewards[idxs], device=self.device)
+        next_obses = torch.as_tensor(self.next_obses[idxs], device=self.device).float()
+        not_dones = torch.as_tensor(self.not_dones[idxs], device=self.device)
+        not_dones_no_max = torch.as_tensor(self.not_dones_no_max[idxs], device=self.device)
+
+        if self.full:
+            full_obs = self.obses
+        else:
+            full_obs = self.obses[:self.idx]
+        full_obs = torch.as_tensor(full_obs, device=self.device)
+
+        return obses, full_obs, actions, rewards, next_obses, not_dones, not_dones_no_max
