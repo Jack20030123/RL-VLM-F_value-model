@@ -455,11 +455,11 @@ class RewardModel:
             )
 
     def state_dict(self):
-        """Return state dict of all ensemble members (used by value_diff mode only)."""
+        """Return state dict of all ensemble members (used by progress_diff mode only)."""
         return {f'ensemble_{i}': self.ensemble[i].state_dict() for i in range(self.de)}
 
     def load_state_dict(self, state_dict):
-        """Load state dict into all ensemble members (used by value_diff mode only)."""
+        """Load state dict into all ensemble members (used by progress_diff mode only)."""
         for i in range(self.de):
             self.ensemble[i].load_state_dict(state_dict[f'ensemble_{i}'])
 

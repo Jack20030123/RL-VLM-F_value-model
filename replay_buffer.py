@@ -140,17 +140,17 @@ class ReplayBuffer(object):
         return obses, full_obs, actions, rewards, next_obses, not_dones, not_dones_no_max
 
 
-class ValueDiffReplayBuffer(object):
+class ProgressDiffReplayBuffer(object):
     """
-    Replay buffer for value_diff mode.
+    Replay buffer for progress_diff mode.
 
     Key difference from ReplayBuffer:
     - Stores both curr_image (s_t) and next_image (s_{t+1})
-    - relabel_with_predictor computes V(s_{t+1}) - V(s_t) instead of V(s)
+    - relabel_with_predictor computes P(s_{t+1}) - P(s_t) instead of P(s)
 
     This ensures semantic consistency between:
-    - Training time: reward_hat = V(s_{t+1}) - V(s_t)
-    - Relabel time:  reward = V(s_{t+1}) - V(s_t)
+    - Training time: reward_hat = P(s_{t+1}) - P(s_t)
+    - Relabel time:  reward = P(s_{t+1}) - P(s_t)
     """
 
     def __init__(self, obs_shape, action_shape, capacity, device, window=1, image_size=300):
@@ -168,7 +168,7 @@ class ValueDiffReplayBuffer(object):
         self.not_dones_no_max = np.empty((capacity, 1), dtype=np.float32)
         self.window = window
 
-        # Store BOTH curr and next images for value_diff relabeling
+        # Store BOTH curr and next images for progress_diff relabeling
         self.curr_images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
         self.next_images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
 
@@ -205,7 +205,7 @@ class ValueDiffReplayBuffer(object):
 
     def relabel_with_predictor(self, predictor):
         """
-        Relabel rewards using value difference: reward = V(s_{t+1}) - V(s_t)
+        Relabel rewards using progress difference: reward = P(s_{t+1}) - P(s_t)
 
         This maintains semantic consistency with training-time reward computation.
         """
@@ -230,12 +230,12 @@ class ValueDiffReplayBuffer(object):
             next_imgs = np.transpose(next_imgs, (0, 3, 1, 2))  # HWC -> CHW
             next_imgs = next_imgs.astype(np.float32) / 255.0
 
-            # Compute V(s_t) and V(s_{t+1})
-            v_curr = predictor.r_hat_batch(curr_imgs)  # shape: (batch, 1)
-            v_next = predictor.r_hat_batch(next_imgs)  # shape: (batch, 1)
+            # Compute P(s_t) and P(s_{t+1})
+            p_curr = predictor.r_hat_batch(curr_imgs)  # shape: (batch, 1)
+            p_next = predictor.r_hat_batch(next_imgs)  # shape: (batch, 1)
 
-            # reward = V(s_{t+1}) - V(s_t)
-            pred_reward = v_next - v_curr
+            # reward = P(s_{t+1}) - P(s_t)
+            pred_reward = p_next - p_curr
             self.rewards[start_idx:last_index] = pred_reward
 
         torch.cuda.empty_cache()
