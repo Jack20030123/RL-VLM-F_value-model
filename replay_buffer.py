@@ -74,9 +74,9 @@ class ReplayBuffer(object):
         
     def relabel_with_predictor(self, predictor):
         if not self.store_image:
-            batch_size = 200
+            batch_size = 1024
         else:
-            batch_size = 128  # Increased from 32 for faster relabeling (A100 GPU)
+            batch_size = 1024
         total_iter = int(self.idx/batch_size)
         
         if self.idx > batch_size*total_iter:
@@ -209,7 +209,7 @@ class ProgressDiffReplayBuffer(object):
 
         This maintains semantic consistency with training-time reward computation.
         """
-        batch_size = 128  # For GPU efficiency
+        batch_size = 1024
         total_samples = self.capacity if self.full else self.idx
         total_iter = int(total_samples / batch_size)
 
