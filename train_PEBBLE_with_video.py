@@ -219,14 +219,16 @@ class Workspace(object):
 
         video_save_dir = os.path.join(self.work_dir, 'training_videos')
 
-        # Get max episode steps
+        # Get max episode steps (check multiple attributes for different env types)
         max_ep_steps = 500  # default
         if hasattr(self.env, '_max_episode_steps'):
             max_ep_steps = self.env._max_episode_steps
         elif hasattr(self.env, 'max_path_length'):
             max_ep_steps = self.env.max_path_length
+        elif hasattr(self.env, 'horizon'):
+            max_ep_steps = self.env.horizon  # softgym uses horizon
 
-        # Create visualizer
+        # Create visualizer with dynamic fps based on frame count
         self.video_visualizer = RewardVideoVisualizer(
             env_frame_size=(image_height, image_width),
             plot_size=(400, 300),

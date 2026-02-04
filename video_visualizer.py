@@ -10,6 +10,7 @@ matplotlib.use("Agg")
 import cv2
 import os
 import imageio
+import gc
 
 class RewardVideoVisualizer:
     """Visualizer for environment + reward curves"""
@@ -18,7 +19,7 @@ class RewardVideoVisualizer:
                  fps=30, max_episode_length=500, save_dir="./videos"):
         self.env_frame_size = env_frame_size
         self.plot_size = plot_size
-        self.fps = fps
+        self.base_fps = fps  # Base fps for < 40 or > 200 frames
         self.max_episode_length = max_episode_length
         self.save_dir = save_dir
         os.makedirs(save_dir, exist_ok=True)
@@ -63,12 +64,18 @@ class RewardVideoVisualizer:
         ax.set_title("reward_hat", fontsize=8, fontweight="bold")
         ax.tick_params(axis='both', which='major', labelsize=6)
         ax.grid(True, alpha=0.3)
-        ax.set_xlim(0, max(self.max_episode_length, len(steps_to_plot)))
+        # Use actual episode length for x-axis (with small margin)
+        total_steps = len(self.steps)
+        ax.set_xlim(0, max(total_steps + 1, 2))  # At least show 0-2 range for very short episodes
 
         if len(rewards_to_plot) > 0:
             y_min = min(rewards_to_plot)
             y_max = max(rewards_to_plot)
-            y_margin = (y_max - y_min) * 0.1
+            y_range = y_max - y_min
+            if y_range < 0.01:  # Very small or zero range (single point or constant rewards)
+                y_margin = 0.5  # Use fixed margin
+            else:
+                y_margin = y_range * 0.1
             ax.set_ylim(y_min - y_margin, y_max + y_margin)
         else:
             ax.set_ylim(-1, 1)
@@ -100,6 +107,37 @@ class RewardVideoVisualizer:
 
         return np.hstack([env_frame, plot_frame])
 
+    def _calculate_fps(self, num_frames):
+        """Calculate fps based on frame count to achieve target video duration.
+
+        Target durations:
+        - 1 frame: 1 second (fps=1)
+        - 2-39 frames: 2 seconds
+        - 40-99 frames: ~10 seconds
+        - 100-200 frames: ~20 seconds
+        - > 200 frames: ~30 seconds
+        """
+        if num_frames <= 0:
+            return self.base_fps
+
+        if num_frames == 1:
+            # Single frame: 1 second
+            fps = 1.0
+        elif num_frames < 40:
+            # 2-39 frames: ~2 seconds
+            fps = num_frames / 2.0
+        elif num_frames <= 99:
+            # 40-99 frames: ~10 seconds
+            fps = num_frames / 10.0
+        elif num_frames <= 200:
+            # 100-200 frames: ~20 seconds
+            fps = num_frames / 20.0
+        else:
+            # > 200 frames: ~30 seconds
+            fps = num_frames / 30.0
+
+        return max(fps, 1.0)  # At least 1 fps
+
     def save_video(self, filename, episode_num=None):
         if len(self.frames) == 0:
             print("Warning: No frames to save")
@@ -110,17 +148,35 @@ class RewardVideoVisualizer:
         else:
             video_path = os.path.join(self.save_dir, f"{filename}.mp4")
 
-        combined_frames = []
-        for i in range(len(self.frames)):
-            combined_frame = self.create_combined_frame(i)
-            combined_frames.append(combined_frame)
+        num_frames = len(self.frames)
+        fps = self._calculate_fps(num_frames)
+        avg_reward = np.mean(self.rewards)
 
-        imageio.mimsave(video_path, combined_frames, fps=self.fps)
+        # Force garbage collection before spawning ffmpeg subprocess
+        # This helps prevent "Cannot allocate memory" errors during fork()
+        gc.collect()
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
+        # Use streaming write to avoid loading all frames into memory at once
+        writer = imageio.get_writer(video_path, fps=fps)
+        try:
+            for i in range(num_frames):
+                combined_frame = self.create_combined_frame(i)
+                writer.append_data(combined_frame)
+                # Clear processed frame to free memory
+                self.frames[i] = None
+        finally:
+            writer.close()
 
         print(f"Video saved to: {video_path}")
-        print(f"  - Total frames: {len(combined_frames)}")
-        print(f"  - Duration: {len(combined_frames)/self.fps:.1f}s")
-        print(f"  - Avg reward: {np.mean(self.rewards):.3f}")
+        print(f"  - Total frames: {num_frames}")
+        print(f"  - FPS: {fps:.1f}")
+        print(f"  - Duration: {num_frames/fps:.1f}s")
+        print(f"  - Avg reward: {avg_reward:.3f}")
 
         return video_path
 
@@ -139,8 +195,10 @@ class RewardVideoVisualizer:
             indices = range(len(self.frames))
 
         combined_frames = [self.create_combined_frame(i) for i in indices]
-        imageio.mimsave(gif_path, combined_frames, fps=min(self.fps, 10), loop=0)
-        print(f"GIF saved to: {gif_path}")
+        # Calculate dynamic fps for gif (capped at 10 for compatibility)
+        fps = min(self._calculate_fps(len(combined_frames)), 10)
+        imageio.mimsave(gif_path, combined_frames, fps=fps, loop=0)
+        print(f"GIF saved to: {gif_path} (fps={fps:.1f})")
         return gif_path
 
 

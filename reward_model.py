@@ -514,8 +514,7 @@ class RewardModel:
         train_targets = np.array(self.targets[:max_len])
         if self.vlm_label or self.image_reward:
             train_images = np.array(self.img_inputs[:max_len])
-            if 'Cloth' in self.env_name:
-                train_images = train_images.squeeze(1)
+            # Removed Cloth squeeze(1) - not needed without list wrapping in add_data
 
         batch_index_2 = np.random.choice(max_len, size=mb_size, replace=True)
         sa_t_2 = train_inputs[batch_index_2] # Batch x T x dim of s&a
@@ -588,6 +587,10 @@ class RewardModel:
 
         # NOTE: buffer_seg is overloaded. When not using image based rewards, it gives concatenated state action pairs.
         # When image based rewards are used, it gives the images.
+        # Reshape images to match buffer shape (add segment dimension)
+        if self.image_reward:
+            sa_t_1 = sa_t_1.reshape(sa_t_1.shape[0], 1, sa_t_1.shape[1], sa_t_1.shape[2], sa_t_1.shape[3])
+            sa_t_2 = sa_t_2.reshape(sa_t_2.shape[0], 1, sa_t_2.shape[1], sa_t_2.shape[2], sa_t_2.shape[3])
         if next_index >= self.capacity:
             self.buffer_full = True
             maximum_index = self.capacity - self.buffer_index
@@ -603,9 +606,6 @@ class RewardModel:
 
             self.buffer_index = remain
         else:
-            if self.image_reward:
-                sa_t_1 = sa_t_1.reshape(sa_t_1.shape[0], 1, sa_t_1.shape[1], sa_t_1.shape[2], sa_t_1.shape[3])
-                sa_t_2 = sa_t_2.reshape(sa_t_2.shape[0], 1, sa_t_2.shape[1], sa_t_2.shape[2], sa_t_2.shape[3])
             np.copyto(self.buffer_seg1[self.buffer_index:next_index], sa_t_1)
             np.copyto(self.buffer_seg2[self.buffer_index:next_index], sa_t_2)
             np.copyto(self.buffer_label[self.buffer_index:next_index], labels)

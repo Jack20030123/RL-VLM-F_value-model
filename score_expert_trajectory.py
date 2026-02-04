@@ -1,7 +1,5 @@
 """
-Generate expert demonstrations using trained actor from models_gt directory,
-and score each timestep of the expert trajectory using reward model from models directory.
-Analyze whether the learned reward model behaves more like a reward model, value model, or progress model.
+Generate expert demonstrations and analyze reward model correlation with GT reward and task progress.
 
 Usage:
     python score_expert_trajectory.py \
@@ -9,7 +7,6 @@ Usage:
         --step 500000 \
         --reward_model_dir models \
         --reward_model_step 1000000 \
-        --save_images \
         --output_dir expert_trajectory_output
 """
 
@@ -21,10 +18,9 @@ import torch
 import cv2
 from PIL import Image
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
+from matplotlib.animation import FuncAnimation, FFMpegWriter
 from scipy.stats import pearsonr, spearmanr
 
-# Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from reward_model import gen_image_net
@@ -82,18 +78,14 @@ def load_reward_model(model_dir, step,
                       image_width=300,
                       conv_kernel_sizes=[5, 3, 3, 3],
                       conv_n_channels=[16, 32, 64, 128],
-                      conv_strides=[3, 2, 2, 2],
-                      resnet=False):
+                      conv_strides=[3, 2, 2, 2]):
     """Load trained reward model ensemble."""
     ensemble = []
 
     for member in range(ensemble_size):
-        if not resnet:
-            model = gen_image_net(image_height, image_width,
-                                  conv_kernel_sizes, conv_n_channels,
-                                  conv_strides).float().to(device)
-        else:
-            model = gen_image_net2().float().to(device)
+        model = gen_image_net(image_height, image_width,
+                              conv_kernel_sizes, conv_n_channels,
+                              conv_strides).float().to(device)
 
         model_path = os.path.join(model_dir, f'reward_model_{step}_{member}.pt')
         if not os.path.exists(model_path):
@@ -108,19 +100,7 @@ def load_reward_model(model_dir, step,
 
 
 def r_hat(ensemble, image):
-    """
-    Score a single image using the reward model ensemble.
-
-    Args:
-        ensemble: list of models
-        image: numpy array, shape (H, W, 3), uint8 [0-255]
-
-    Returns:
-        mean_score: float, ensemble mean score
-        se_score: float, ensemble standard error (std / sqrt(n))
-        member_scores: list, score from each ensemble member
-    """
-    # Preprocess: HWC -> CHW, normalize to [0, 1]
+    """Score a single image using the reward model ensemble."""
     img = image.transpose(2, 0, 1).astype(np.float32) / 255.0
     img = img.reshape(1, 3, img.shape[1], img.shape[2])
     img_tensor = torch.from_numpy(img).float().to(device)
@@ -131,11 +111,7 @@ def r_hat(ensemble, image):
             score = model(img_tensor).detach().cpu().numpy().item()
             member_scores.append(score)
 
-    n = len(member_scores)
-    std = np.std(member_scores)
-    se = std / np.sqrt(n)  # Standard error
-
-    return np.mean(member_scores), se, member_scores
+    return np.mean(member_scores)
 
 
 def act(actor, obs, sample=False):
@@ -148,93 +124,42 @@ def act(actor, obs, sample=False):
     return action.cpu().numpy()[0]
 
 
-def normalize_to_01(arr):
-    """Normalize array to [0, 1] range."""
-    arr = np.array(arr)
-    min_val = arr.min()
-    max_val = arr.max()
-    if max_val - min_val < 1e-8:
-        return np.zeros_like(arr)
-    return (arr - min_val) / (max_val - min_val)
-
-
-def compute_discounted_return(rewards, gamma):
-    """
-    Compute discounted cumulative return from each timestep to the end.
-
-    Args:
-        rewards: list or array, immediate reward at each timestep
-        gamma: float, discount factor
-
-    Returns:
-        returns: array, discounted cumulative return at each timestep
-                 returns[t] = r[t] + gamma*r[t+1] + gamma^2*r[t+2] + ...
-    """
-    rewards = np.array(rewards)
-    T = len(rewards)
-    returns = np.zeros(T)
-
-    # Compute backwards
-    returns[-1] = rewards[-1]
-    for t in range(T - 2, -1, -1):
-        returns[t] = rewards[t] + gamma * returns[t + 1]
-
-    return returns
-
-
 def generate_expert_trajectory(env, actor, max_steps=200, image_size=300, seed=0):
-    """
-    Generate expert trajectory using trained actor.
-
-    Returns:
-        images: list of numpy arrays, RGB image at each frame
-        task_progress_list: list of float, task progress (in_place_reward) at each frame
-        gt_reward_list: list of float, ground truth reward at each frame
-        success: bool, whether episode succeeded
-        success_step: int or None, step at which success occurred (0-indexed), None if not successful
-    """
+    """Generate expert trajectory using trained actor."""
     images = []
     task_progress_list = []
     gt_reward_list = []
     success = False
     success_step = None
 
-    # Set random seed
     np.random.seed(seed)
     try:
         reset_result = env.reset(seed=seed)
     except TypeError:
         reset_result = env.reset()
-    # Compatible with old and new Gym API
+
     if isinstance(reset_result, tuple):
         obs, _ = reset_result
     else:
         obs = reset_result
 
     for step in range(max_steps):
-        # Get RGB image - consistent with training code
         rgb_image = env.render()
-        rgb_image = rgb_image[::-1, :, :]  # Flip
-        # Crop and resize
+        rgb_image = rgb_image[::-1, :, :]
         rgb_image = rgb_image[100:400, 100:400, :]
         rgb_image = cv2.resize(rgb_image, (image_size, image_size))
 
         images.append(rgb_image.copy())
 
-        # Select action
         action = act(actor, obs, sample=False)
-
-        # Execute action
         next_obs, reward, done, info = env.step(action)
 
-        # Get task progress (in_place_reward is opening_reward, range 0-1)
         task_progress = info.get('in_place_reward', 0.0)
         task_progress_list.append(task_progress)
         gt_reward_list.append(reward)
 
         obs = next_obs
 
-        # Check success (but don't exit early, continue to max_steps)
         if info.get('success', False) and not success:
             print(f"Episode succeeded at step {step + 1}")
             success = True
@@ -252,43 +177,21 @@ def generate_expert_trajectory(env, actor, max_steps=200, image_size=300, seed=0
 def main():
     parser = argparse.ArgumentParser(description='Score expert trajectory with trained reward model')
 
-    # Model parameters
-    parser.add_argument('--model_dir', type=str, default='models_gt',
-                        help='Path to the directory containing actor model files')
-    parser.add_argument('--reward_model_dir', type=str, default='models',
-                        help='Path to the directory containing reward model files (default: same as model_dir)')
-    parser.add_argument('--step', type=int, default=500000,
-                        help='Training step of the actor to load')
-    parser.add_argument('--reward_model_step', type=int, default=1000000,
-                        help='Training step of the reward model to load')
-    parser.add_argument('--actor_step', type=int, default=None,
-                        help='Training step of the actor (if different from --step)')
-    parser.add_argument('--ensemble_size', type=int, default=3,
-                        help='Number of ensemble members')
-
-    # Environment parameters
-    parser.add_argument('--env', type=str, default='metaworld_drawer-open-v2',
-                        help='Environment name')
-    parser.add_argument('--seed', type=int, default=0,
-                        help='Random seed')
-    parser.add_argument('--max_steps', type=int, default=500,
-                        help='Maximum steps per episode')
-
-    # Image parameters
-    parser.add_argument('--image_size', type=int, default=300,
-                        help='Image size (height and width)')
-
-    # Output parameters
-    parser.add_argument('--save_images', action='store_true',
-                        help='Save trajectory images (first 30 frames)')
-    parser.add_argument('--output_dir', type=str, default='expert_trajectory_output',
-                        help='Output directory for saved images and plots')
+    parser.add_argument('--model_dir', type=str, default='models_gt')
+    parser.add_argument('--reward_model_dir', type=str, default='models')
+    parser.add_argument('--step', type=int, default=500000)
+    parser.add_argument('--reward_model_step', type=int, default=1000000)
+    parser.add_argument('--actor_step', type=int, default=None)
+    parser.add_argument('--ensemble_size', type=int, default=3)
+    parser.add_argument('--env', type=str, default='metaworld_drawer-open-v2')
+    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--max_steps', type=int, default=500)
+    parser.add_argument('--image_size', type=int, default=300)
+    parser.add_argument('--output_dir', type=str, default='expert_trajectory_output')
 
     args = parser.parse_args()
 
-    # If actor_step not specified, use step
     actor_step = args.actor_step if args.actor_step is not None else args.step
-    # Reward model directory
     reward_model_dir = args.reward_model_dir if args.reward_model_dir else args.model_dir
 
     print(f"\n{'='*50}")
@@ -332,393 +235,337 @@ def main():
     # Score each frame
     print(f"\n=== Scoring Each Frame ===")
     reward_hats = []
-    reward_ses = []  # Standard errors
-    all_member_scores = []  # Scores from each member
     for i, img in enumerate(images):
-        mean_score, se_score, member_scores = r_hat(reward_ensemble, img)
-        reward_hats.append(mean_score)
-        reward_ses.append(se_score)
-        all_member_scores.append(member_scores)
+        score = r_hat(reward_ensemble, img)
+        reward_hats.append(score)
 
     reward_hats = np.array(reward_hats)
-    reward_ses = np.array(reward_ses)
-    all_member_scores = np.array(all_member_scores)  # shape: (num_frames, 3)
     gt_rewards = np.array(gt_reward_list)
     task_progress = np.array(task_progress_list)
 
-    # Compute discounted returns with different discount factors (Value Model ground truth)
-    gammas = [0.75, 0.90, 0.99]
-    discounted_returns = {}
-    for gamma in gammas:
-        discounted_returns[gamma] = compute_discounted_return(gt_rewards, gamma)
-
-    # Normalized versions
-    reward_hats_norm = normalize_to_01(reward_hats)
-    gt_rewards_norm = normalize_to_01(gt_rewards)
-    task_progress_norm = normalize_to_01(task_progress)
-    discounted_returns_norm = {}
-    for gamma in gammas:
-        discounted_returns_norm[gamma] = normalize_to_01(discounted_returns[gamma])
-
-    # Print results
-    print(f"\n{'Step':<6} {'R_hat':<10} {'GT_Rew':<10} {'Progress':<10} {'Ret_0.99':<12}")
-    print("-" * 60)
-
-    for i in range(len(reward_hats)):
-        print(f"{i:<6} {reward_hats[i]:<10.4f} {gt_rewards[i]:<10.4f} {task_progress[i]:<10.4f} {discounted_returns[0.99][i]:<12.4f}")
+    # Compute diff form: reward_hat_diff[i] = reward_hat[i+1] - reward_hat[i]
+    reward_hat_diffs = np.diff(reward_hats)  # length = len(reward_hats) - 1
+    # Align gt_rewards with diffs (use [:-1] to match diff indices)
+    gt_rewards_for_diff = gt_rewards[:-1]
+    # Compute progress diff for comparison
+    progress_diffs = np.diff(task_progress)
 
     # Statistics
     print(f"\n=== Statistics ===")
     print(f"Num frames:             {len(reward_hats)}")
     print(f"Reward_hat range:       [{np.min(reward_hats):.6f}, {np.max(reward_hats):.6f}]")
+    print(f"Reward_hat_diff range:  [{np.min(reward_hat_diffs):.6f}, {np.max(reward_hat_diffs):.6f}]")
     print(f"GT reward range:        [{np.min(gt_rewards):.6f}, {np.max(gt_rewards):.6f}]")
     print(f"Task progress range:    [{np.min(task_progress):.6f}, {np.max(task_progress):.6f}]")
-    for gamma in gammas:
-        print(f"Return (gamma={gamma}) range:  [{np.min(discounted_returns[gamma]):.6f}, {np.max(discounted_returns[gamma]):.6f}]")
+    print(f"Progress diff range:    [{np.min(progress_diffs):.6f}, {np.max(progress_diffs):.6f}]")
     print(f"Episode success:        {success}")
     print(f"Success step:           {success_step}")
 
-    # Pre-success data (for correlation analysis)
+    # Correlation analysis - All steps (Original form)
+    print(f"\n=== Correlation Analysis: ORIGINAL reward_hat (All Steps, n={len(reward_hats)}) ===")
+
+    pearson_gt_all, p_gt_all = pearsonr(reward_hats, gt_rewards)
+    spearman_gt_all, _ = spearmanr(reward_hats, gt_rewards)
+    print(f"reward_hat vs GT Reward:      Pearson={pearson_gt_all:.4f} (p={p_gt_all:.2e}), Spearman={spearman_gt_all:.4f}")
+
+    pearson_prog_all, p_prog_all = pearsonr(reward_hats, task_progress)
+    spearman_prog_all, _ = spearmanr(reward_hats, task_progress)
+    print(f"reward_hat vs Task Progress:  Pearson={pearson_prog_all:.4f} (p={p_prog_all:.2e}), Spearman={spearman_prog_all:.4f}")
+
+    # Correlation analysis - First 30 steps (Original form)
+    first_n = min(30, len(reward_hats))
+    print(f"\n=== Correlation Analysis: ORIGINAL reward_hat (First {first_n} Steps) ===")
+
+    pearson_gt_first30, p_gt_first30 = pearsonr(reward_hats[:first_n], gt_rewards[:first_n])
+    spearman_gt_first30, _ = spearmanr(reward_hats[:first_n], gt_rewards[:first_n])
+    print(f"reward_hat vs GT Reward:      Pearson={pearson_gt_first30:.4f} (p={p_gt_first30:.2e}), Spearman={spearman_gt_first30:.4f}")
+
+    pearson_prog_first30, p_prog_first30 = pearsonr(reward_hats[:first_n], task_progress[:first_n])
+    spearman_prog_first30, _ = spearmanr(reward_hats[:first_n], task_progress[:first_n])
+    print(f"reward_hat vs Task Progress:  Pearson={pearson_prog_first30:.4f} (p={p_prog_first30:.2e}), Spearman={spearman_prog_first30:.4f}")
+
+    # Correlation analysis - All steps (Diff form)
+    print(f"\n=== Correlation Analysis: DIFF reward_hat (All Steps, n={len(reward_hat_diffs)}) ===")
+
+    pearson_gt_diff_all, p_gt_diff_all = pearsonr(reward_hat_diffs, gt_rewards_for_diff)
+    spearman_gt_diff_all, _ = spearmanr(reward_hat_diffs, gt_rewards_for_diff)
+    print(f"reward_hat_diff vs GT Reward:      Pearson={pearson_gt_diff_all:.4f} (p={p_gt_diff_all:.2e}), Spearman={spearman_gt_diff_all:.4f}")
+
+    pearson_progdiff_diff_all, p_progdiff_diff_all = pearsonr(reward_hat_diffs, progress_diffs)
+    spearman_progdiff_diff_all, _ = spearmanr(reward_hat_diffs, progress_diffs)
+    print(f"reward_hat_diff vs Progress Diff:  Pearson={pearson_progdiff_diff_all:.4f} (p={p_progdiff_diff_all:.2e}), Spearman={spearman_progdiff_diff_all:.4f}")
+
+    # Correlation analysis - First 30 steps (Diff form)
+    first_n_diff = min(30, len(reward_hat_diffs))
+    print(f"\n=== Correlation Analysis: DIFF reward_hat (First {first_n_diff} Steps) ===")
+
+    pearson_gt_diff_first30, p_gt_diff_first30 = pearsonr(reward_hat_diffs[:first_n_diff], gt_rewards_for_diff[:first_n_diff])
+    spearman_gt_diff_first30, _ = spearmanr(reward_hat_diffs[:first_n_diff], gt_rewards_for_diff[:first_n_diff])
+    print(f"reward_hat_diff vs GT Reward:      Pearson={pearson_gt_diff_first30:.4f} (p={p_gt_diff_first30:.2e}), Spearman={spearman_gt_diff_first30:.4f}")
+
+    pearson_progdiff_diff_first30, p_progdiff_diff_first30 = pearsonr(reward_hat_diffs[:first_n_diff], progress_diffs[:first_n_diff])
+    spearman_progdiff_diff_first30, _ = spearmanr(reward_hat_diffs[:first_n_diff], progress_diffs[:first_n_diff])
+    print(f"reward_hat_diff vs Progress Diff:  Pearson={pearson_progdiff_diff_first30:.4f} (p={p_progdiff_diff_first30:.2e}), Spearman={spearman_progdiff_diff_first30:.4f}")
+
+    # Correlation analysis - Pre-success
     if success_step is not None:
-        # Include success_step (the frame where success occurred), so 0 to success_step (inclusive)
         pre_success_end = success_step + 1
         reward_hats_pre = reward_hats[:pre_success_end]
         gt_rewards_pre = gt_rewards[:pre_success_end]
         task_progress_pre = task_progress[:pre_success_end]
-        discounted_returns_pre = {gamma: discounted_returns[gamma][:pre_success_end] for gamma in gammas}
+
+        print(f"\n=== Correlation Analysis: ORIGINAL reward_hat (Pre-Success, steps 0-{success_step}, n={len(reward_hats_pre)}) ===")
+
+        pearson_gt_pre, p_gt_pre = pearsonr(reward_hats_pre, gt_rewards_pre)
+        spearman_gt_pre, _ = spearmanr(reward_hats_pre, gt_rewards_pre)
+        print(f"reward_hat vs GT Reward:      Pearson={pearson_gt_pre:.4f} (p={p_gt_pre:.2e}), Spearman={spearman_gt_pre:.4f}")
+
+        pearson_prog_pre, p_prog_pre = pearsonr(reward_hats_pre, task_progress_pre)
+        spearman_prog_pre, _ = spearmanr(reward_hats_pre, task_progress_pre)
+        print(f"reward_hat vs Task Progress:  Pearson={pearson_prog_pre:.4f} (p={p_prog_pre:.2e}), Spearman={spearman_prog_pre:.4f}")
+
+        # Diff form - Pre-success
+        if pre_success_end > 1:
+            reward_hat_diffs_pre = reward_hat_diffs[:pre_success_end - 1]
+            gt_rewards_diff_pre = gt_rewards_for_diff[:pre_success_end - 1]
+            progress_diffs_pre = progress_diffs[:pre_success_end - 1]
+
+            print(f"\n=== Correlation Analysis: DIFF reward_hat (Pre-Success, steps 0-{success_step-1}, n={len(reward_hat_diffs_pre)}) ===")
+
+            pearson_gt_diff_pre, p_gt_diff_pre = pearsonr(reward_hat_diffs_pre, gt_rewards_diff_pre)
+            spearman_gt_diff_pre, _ = spearmanr(reward_hat_diffs_pre, gt_rewards_diff_pre)
+            print(f"reward_hat_diff vs GT Reward:      Pearson={pearson_gt_diff_pre:.4f} (p={p_gt_diff_pre:.2e}), Spearman={spearman_gt_diff_pre:.4f}")
+
+            pearson_progdiff_diff_pre, p_progdiff_diff_pre = pearsonr(reward_hat_diffs_pre, progress_diffs_pre)
+            spearman_progdiff_diff_pre, _ = spearmanr(reward_hat_diffs_pre, progress_diffs_pre)
+            print(f"reward_hat_diff vs Progress Diff:  Pearson={pearson_progdiff_diff_pre:.4f} (p={p_progdiff_diff_pre:.2e}), Spearman={spearman_progdiff_diff_pre:.4f}")
+        else:
+            pearson_gt_diff_pre, p_gt_diff_pre, spearman_gt_diff_pre = None, None, None
+            pearson_progdiff_diff_pre, p_progdiff_diff_pre, spearman_progdiff_diff_pre = None, None, None
     else:
-        # Not successful, use all data
-        reward_hats_pre = reward_hats
-        gt_rewards_pre = gt_rewards
-        task_progress_pre = task_progress
-        discounted_returns_pre = discounted_returns
-
-    # ==================== Pre-success correlation analysis (main focus) ====================
-    print(f"\n=== Correlation Analysis: PRE-SUCCESS (step 0-{success_step}, n={len(reward_hats_pre)}) ===")
-    print(f"Correlation between reward_hat and ground truth (pre-success):\n")
-
-    # Reward Model: reward_hat vs gt_reward
-    pearson_r, pearson_p = pearsonr(reward_hats_pre, gt_rewards_pre)
-    spearman_r, spearman_p = spearmanr(reward_hats_pre, gt_rewards_pre)
-    print(f"  vs GT Reward (Reward Model):    Pearson={pearson_r:.4f} (p={pearson_p:.2e}), Spearman={spearman_r:.4f}")
-
-    # Progress Model: reward_hat vs task_progress
-    pearson_r, pearson_p = pearsonr(reward_hats_pre, task_progress_pre)
-    spearman_r, spearman_p = spearmanr(reward_hats_pre, task_progress_pre)
-    print(f"  vs Task Progress (Progress):    Pearson={pearson_r:.4f} (p={pearson_p:.2e}), Spearman={spearman_r:.4f}")
-
-    # Value Model: reward_hat vs discounted_return (for each gamma)
-    for gamma in gammas:
-        pearson_r, pearson_p = pearsonr(reward_hats_pre, discounted_returns_pre[gamma])
-        spearman_r, spearman_p = spearmanr(reward_hats_pre, discounted_returns_pre[gamma])
-        print(f"  vs Return gamma={gamma} (Value):      Pearson={pearson_r:.4f} (p={pearson_p:.2e}), Spearman={spearman_r:.4f}")
-
-    # ==================== All steps correlation analysis (reference) ====================
-    print(f"\n=== Correlation Analysis: ALL STEPS (step 0-{len(reward_hats)-1}, n={len(reward_hats)}) ===")
-    print(f"Correlation between reward_hat and ground truth (all steps):\n")
-
-    # Reward Model: reward_hat vs gt_reward
-    pearson_r, pearson_p = pearsonr(reward_hats, gt_rewards)
-    spearman_r, spearman_p = spearmanr(reward_hats, gt_rewards)
-    print(f"  vs GT Reward (Reward Model):    Pearson={pearson_r:.4f} (p={pearson_p:.2e}), Spearman={spearman_r:.4f}")
-
-    # Progress Model: reward_hat vs task_progress
-    pearson_r, pearson_p = pearsonr(reward_hats, task_progress)
-    spearman_r, spearman_p = spearmanr(reward_hats, task_progress)
-    print(f"  vs Task Progress (Progress):    Pearson={pearson_r:.4f} (p={pearson_p:.2e}), Spearman={spearman_r:.4f}")
-
-    # Value Model: reward_hat vs discounted_return (for each gamma)
-    for gamma in gammas:
-        pearson_r, pearson_p = pearsonr(reward_hats, discounted_returns[gamma])
-        spearman_r, spearman_p = spearmanr(reward_hats, discounted_returns[gamma])
-        print(f"  vs Return gamma={gamma} (Value):      Pearson={pearson_r:.4f} (p={pearson_p:.2e}), Spearman={spearman_r:.4f}")
+        pearson_gt_pre, p_gt_pre, spearman_gt_pre = None, None, None
+        pearson_prog_pre, p_prog_pre, spearman_prog_pre = None, None, None
+        pearson_gt_diff_pre, p_gt_diff_pre, spearman_gt_diff_pre = None, None, None
+        pearson_progdiff_diff_pre, p_progdiff_diff_pre, spearman_progdiff_diff_pre = None, None, None
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Save first 30 frames
-    if args.save_images:
-        print(f"\n=== Saving First 30 Images to {args.output_dir} ===")
-        num_to_save = min(30, len(images))
-        for i in range(num_to_save):
-            img_path = os.path.join(args.output_dir, f'frame_{i:04d}.png')
-            Image.fromarray(images[i]).save(img_path)
-        print(f"Saved {num_to_save} images")
-
-    # Save scores to file (including all raw and normalized values)
-    scores_path = os.path.join(args.output_dir, 'scores.csv')
-    with open(scores_path, 'w') as f:
-        # Write header
-        header = ["step",
-                  "reward_hat", "reward_hat_norm",
-                  "gt_reward", "gt_reward_norm",
-                  "task_progress", "task_progress_norm"]
-        for gamma in gammas:
-            header.append(f"return_{gamma}")
-            header.append(f"return_{gamma}_norm")
-        # Add ensemble member scores
-        for m in range(args.ensemble_size):
-            header.append(f"model_{m}")
-        header.append("reward_hat_se")
-        f.write(",".join(header) + "\n")
-
-        # Write data
-        for i in range(len(reward_hats)):
-            row = [
-                str(i),
-                f"{reward_hats[i]:.6f}", f"{reward_hats_norm[i]:.6f}",
-                f"{gt_rewards[i]:.6f}", f"{gt_rewards_norm[i]:.6f}",
-                f"{task_progress[i]:.6f}", f"{task_progress_norm[i]:.6f}"
-            ]
-            for gamma in gammas:
-                row.append(f"{discounted_returns[gamma][i]:.6f}")
-                row.append(f"{discounted_returns_norm[gamma][i]:.6f}")
-            for m in range(args.ensemble_size):
-                row.append(f"{all_member_scores[i][m]:.6f}")
-            row.append(f"{reward_ses[i]:.6f}")
-            f.write(",".join(row) + "\n")
-    print(f"Saved scores to {scores_path}")
-
-    # Save correlation analysis results to file
+    # Save correlation results
     corr_path = os.path.join(args.output_dir, 'correlation_analysis.txt')
     with open(corr_path, 'w') as f:
         f.write(f"Correlation Analysis for {args.env}\n")
         f.write(f"Actor step: {actor_step}, Reward model step: {args.reward_model_step}\n")
-        f.write(f"Episode success: {success}\n")
-        f.write(f"Success step: {success_step}\n")
+        f.write(f"Episode success: {success}, Success step: {success_step}\n")
         f.write(f"Num frames: {len(reward_hats)}\n\n")
 
-        # ==================== PRE-SUCCESS correlation analysis ====================
-        f.write("=" * 60 + "\n")
-        f.write(f"PRE-SUCCESS Correlations (step 0-{success_step}, n={len(reward_hats_pre)}):\n")
-        f.write("=" * 60 + "\n\n")
+        f.write(f"{'='*60}\n")
+        f.write(f"ORIGINAL reward_hat = model(s)\n")
+        f.write(f"{'='*60}\n\n")
 
-        pearson_r, pearson_p = pearsonr(reward_hats_pre, gt_rewards_pre)
-        spearman_r, spearman_p = spearmanr(reward_hats_pre, gt_rewards_pre)
-        f.write(f"vs GT Reward (Reward Model):\n")
-        f.write(f"  Pearson:  {pearson_r:.6f} (p={pearson_p:.2e})\n")
-        f.write(f"  Spearman: {spearman_r:.6f} (p={spearman_p:.2e})\n\n")
+        f.write(f"=== All Steps (n={len(reward_hats)}) ===\n")
+        f.write(f"reward_hat vs GT Reward:\n")
+        f.write(f"  Pearson:  {pearson_gt_all:.6f} (p={p_gt_all:.2e})\n")
+        f.write(f"  Spearman: {spearman_gt_all:.6f}\n\n")
+        f.write(f"reward_hat vs Task Progress:\n")
+        f.write(f"  Pearson:  {pearson_prog_all:.6f} (p={p_prog_all:.2e})\n")
+        f.write(f"  Spearman: {spearman_prog_all:.6f}\n\n")
 
-        pearson_r, pearson_p = pearsonr(reward_hats_pre, task_progress_pre)
-        spearman_r, spearman_p = spearmanr(reward_hats_pre, task_progress_pre)
-        f.write(f"vs Task Progress (Progress Model):\n")
-        f.write(f"  Pearson:  {pearson_r:.6f} (p={pearson_p:.2e})\n")
-        f.write(f"  Spearman: {spearman_r:.6f} (p={spearman_p:.2e})\n\n")
+        f.write(f"=== First {first_n} Steps ===\n")
+        f.write(f"reward_hat vs GT Reward:\n")
+        f.write(f"  Pearson:  {pearson_gt_first30:.6f} (p={p_gt_first30:.2e})\n")
+        f.write(f"  Spearman: {spearman_gt_first30:.6f}\n\n")
+        f.write(f"reward_hat vs Task Progress:\n")
+        f.write(f"  Pearson:  {pearson_prog_first30:.6f} (p={p_prog_first30:.2e})\n")
+        f.write(f"  Spearman: {spearman_prog_first30:.6f}\n\n")
 
-        for gamma in gammas:
-            pearson_r, pearson_p = pearsonr(reward_hats_pre, discounted_returns_pre[gamma])
-            spearman_r, spearman_p = spearmanr(reward_hats_pre, discounted_returns_pre[gamma])
-            f.write(f"vs Return gamma={gamma} (Value Model):\n")
-            f.write(f"  Pearson:  {pearson_r:.6f} (p={pearson_p:.2e})\n")
-            f.write(f"  Spearman: {spearman_r:.6f} (p={spearman_p:.2e})\n\n")
+        if success_step is not None:
+            f.write(f"=== Pre-Success (steps 0-{success_step}, n={pre_success_end}) ===\n")
+            f.write(f"reward_hat vs GT Reward:\n")
+            f.write(f"  Pearson:  {pearson_gt_pre:.6f} (p={p_gt_pre:.2e})\n")
+            f.write(f"  Spearman: {spearman_gt_pre:.6f}\n\n")
+            f.write(f"reward_hat vs Task Progress:\n")
+            f.write(f"  Pearson:  {pearson_prog_pre:.6f} (p={p_prog_pre:.2e})\n")
+            f.write(f"  Spearman: {spearman_prog_pre:.6f}\n\n")
 
-        # ==================== ALL STEPS correlation analysis ====================
-        f.write("=" * 60 + "\n")
-        f.write(f"ALL STEPS Correlations (step 0-{len(reward_hats)-1}, n={len(reward_hats)}):\n")
-        f.write("=" * 60 + "\n\n")
+        f.write(f"\n{'='*60}\n")
+        f.write(f"DIFF reward_hat_diff = model(s') - model(s)\n")
+        f.write(f"{'='*60}\n\n")
 
-        pearson_r, pearson_p = pearsonr(reward_hats, gt_rewards)
-        spearman_r, spearman_p = spearmanr(reward_hats, gt_rewards)
-        f.write(f"vs GT Reward (Reward Model):\n")
-        f.write(f"  Pearson:  {pearson_r:.6f} (p={pearson_p:.2e})\n")
-        f.write(f"  Spearman: {spearman_r:.6f} (p={spearman_p:.2e})\n\n")
+        f.write(f"=== All Steps (n={len(reward_hat_diffs)}) ===\n")
+        f.write(f"reward_hat_diff vs GT Reward:\n")
+        f.write(f"  Pearson:  {pearson_gt_diff_all:.6f} (p={p_gt_diff_all:.2e})\n")
+        f.write(f"  Spearman: {spearman_gt_diff_all:.6f}\n\n")
+        f.write(f"reward_hat_diff vs Progress Diff:\n")
+        f.write(f"  Pearson:  {pearson_progdiff_diff_all:.6f} (p={p_progdiff_diff_all:.2e})\n")
+        f.write(f"  Spearman: {spearman_progdiff_diff_all:.6f}\n\n")
 
-        pearson_r, pearson_p = pearsonr(reward_hats, task_progress)
-        spearman_r, spearman_p = spearmanr(reward_hats, task_progress)
-        f.write(f"vs Task Progress (Progress Model):\n")
-        f.write(f"  Pearson:  {pearson_r:.6f} (p={pearson_p:.2e})\n")
-        f.write(f"  Spearman: {spearman_r:.6f} (p={spearman_p:.2e})\n\n")
+        f.write(f"=== First {first_n_diff} Steps ===\n")
+        f.write(f"reward_hat_diff vs GT Reward:\n")
+        f.write(f"  Pearson:  {pearson_gt_diff_first30:.6f} (p={p_gt_diff_first30:.2e})\n")
+        f.write(f"  Spearman: {spearman_gt_diff_first30:.6f}\n\n")
+        f.write(f"reward_hat_diff vs Progress Diff:\n")
+        f.write(f"  Pearson:  {pearson_progdiff_diff_first30:.6f} (p={p_progdiff_diff_first30:.2e})\n")
+        f.write(f"  Spearman: {spearman_progdiff_diff_first30:.6f}\n\n")
 
-        for gamma in gammas:
-            pearson_r, pearson_p = pearsonr(reward_hats, discounted_returns[gamma])
-            spearman_r, spearman_p = spearmanr(reward_hats, discounted_returns[gamma])
-            f.write(f"vs Return gamma={gamma} (Value Model):\n")
-            f.write(f"  Pearson:  {pearson_r:.6f} (p={pearson_p:.2e})\n")
-            f.write(f"  Spearman: {spearman_r:.6f} (p={spearman_p:.2e})\n\n")
+        if success_step is not None and pre_success_end > 1:
+            f.write(f"=== Pre-Success (steps 0-{success_step-1}, n={len(reward_hat_diffs_pre)}) ===\n")
+            f.write(f"reward_hat_diff vs GT Reward:\n")
+            f.write(f"  Pearson:  {pearson_gt_diff_pre:.6f} (p={p_gt_diff_pre:.2e})\n")
+            f.write(f"  Spearman: {spearman_gt_diff_pre:.6f}\n\n")
+            f.write(f"reward_hat_diff vs Progress Diff:\n")
+            f.write(f"  Pearson:  {pearson_progdiff_diff_pre:.6f} (p={p_progdiff_diff_pre:.2e})\n")
+            f.write(f"  Spearman: {spearman_progdiff_diff_pre:.6f}\n")
 
     print(f"Saved correlation analysis to {corr_path}")
 
-    # ==================== Generate video ====================
-    print(f"\n=== Generating Animation Video ===")
+    # Function to generate video
+    def generate_video(images_subset, reward_hats_subset, gt_rewards_subset, task_progress_subset,
+                       video_path, env_name, success_step_local, fps=20,
+                       reward_label="reward_hat", progress_label="Task Progress"):
+        num_frames = len(images_subset)
 
-    # Create 2x3 figure
-    fig_anim, axes_anim = plt.subplots(2, 3, figsize=(16, 10))
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
-    # (0,0) Top-left: Environment image
-    ax_img = axes_anim[0, 0]
-    im = ax_img.imshow(images[0])
-    ax_img.set_title('Drawer Open Task', fontsize=12)
-    ax_img.axis('off')
-    step_text = ax_img.text(0.02, 0.98, '', transform=ax_img.transAxes,
-                            fontsize=12, verticalalignment='top',
-                            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        # Top-left: Environment image
+        ax_img = axes[0, 0]
+        im = ax_img.imshow(images_subset[0])
+        ax_img.set_title('Environment', fontsize=12)
+        ax_img.axis('off')
+        step_text = ax_img.text(0.02, 0.98, '', transform=ax_img.transAxes,
+                                fontsize=12, verticalalignment='top',
+                                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-    # (0,1) Top-middle: reward_hat vs GT Reward
-    ax_reward = axes_anim[0, 1]
-    line_rhat1, = ax_reward.plot([], [], 'b-', linewidth=2, label='reward_hat (norm)')
-    line_gt, = ax_reward.plot([], [], 'r--', linewidth=2, label='GT Reward (norm)')
-    ax_reward.set_xlim(0, len(reward_hats))
-    ax_reward.set_ylim(-0.05, 1.05)
-    ax_reward.set_xlabel('Step')
-    ax_reward.set_ylabel('Normalized [0, 1]')
-    ax_reward.set_title('reward_hat vs GT Reward', fontsize=12)
-    ax_reward.legend(loc='lower right', fontsize=9)
-    ax_reward.grid(True, alpha=0.3)
-    dot_rhat1, = ax_reward.plot([], [], 'bo', markersize=6)
-    dot_gt, = ax_reward.plot([], [], 'ro', markersize=6)
+        # Top-right: reward_hat (raw values)
+        ax_rhat = axes[0, 1]
+        line_rhat, = ax_rhat.plot([], [], 'b-', linewidth=2)
+        ax_rhat.set_xlim(0, num_frames)
+        rhat_margin = max(0.1, (np.max(reward_hats_subset) - np.min(reward_hats_subset)) * 0.1)
+        ax_rhat.set_ylim(np.min(reward_hats_subset) - rhat_margin, np.max(reward_hats_subset) + rhat_margin)
+        ax_rhat.set_xlabel('Step')
+        ax_rhat.set_ylabel(reward_label)
+        ax_rhat.set_title(reward_label, fontsize=12)
+        ax_rhat.grid(True, alpha=0.3)
+        dot_rhat, = ax_rhat.plot([], [], 'bo', markersize=6)
 
-    # (0,2) Top-right: reward_hat vs Progress
-    ax_progress = axes_anim[0, 2]
-    line_rhat2, = ax_progress.plot([], [], 'b-', linewidth=2, label='reward_hat (norm)')
-    line_prog, = ax_progress.plot([], [], 'g--', linewidth=2, label='Progress (norm)')
-    ax_progress.set_xlim(0, len(reward_hats))
-    ax_progress.set_ylim(-0.05, 1.05)
-    ax_progress.set_xlabel('Step')
-    ax_progress.set_ylabel('Normalized [0, 1]')
-    ax_progress.set_title('reward_hat vs Task Progress', fontsize=12)
-    ax_progress.legend(loc='lower right', fontsize=9)
-    ax_progress.grid(True, alpha=0.3)
-    dot_rhat2, = ax_progress.plot([], [], 'bo', markersize=6)
-    dot_prog, = ax_progress.plot([], [], 'go', markersize=6)
+        # Bottom-left: GT Reward (raw values)
+        ax_gt = axes[1, 0]
+        line_gt, = ax_gt.plot([], [], 'r-', linewidth=2)
+        ax_gt.set_xlim(0, num_frames)
+        gt_margin = max(0.1, (np.max(gt_rewards_subset) - np.min(gt_rewards_subset)) * 0.1)
+        ax_gt.set_ylim(np.min(gt_rewards_subset) - gt_margin, np.max(gt_rewards_subset) + gt_margin)
+        ax_gt.set_xlabel('Step')
+        ax_gt.set_ylabel('GT Reward')
+        ax_gt.set_title('GT Reward', fontsize=12)
+        ax_gt.grid(True, alpha=0.3)
+        dot_gt, = ax_gt.plot([], [], 'ro', markersize=6)
 
-    # (1,0) Bottom-left: reward_hat vs Value gamma=0.75
-    ax_val75 = axes_anim[1, 0]
-    line_rhat3, = ax_val75.plot([], [], 'b-', linewidth=2, label='reward_hat (norm)')
-    line_val75, = ax_val75.plot([], [], 'm--', linewidth=2, label='Value gamma=0.75 (norm)')
-    ax_val75.set_xlim(0, len(reward_hats))
-    ax_val75.set_ylim(-0.05, 1.05)
-    ax_val75.set_xlabel('Step')
-    ax_val75.set_ylabel('Normalized [0, 1]')
-    ax_val75.set_title('reward_hat vs Value (gamma=0.75)', fontsize=12)
-    ax_val75.legend(loc='lower right', fontsize=9)
-    ax_val75.grid(True, alpha=0.3)
-    dot_rhat3, = ax_val75.plot([], [], 'bo', markersize=6)
-    dot_val75, = ax_val75.plot([], [], 'mo', markersize=6)
+        # Bottom-right: Task Progress (raw values)
+        ax_prog = axes[1, 1]
+        line_prog, = ax_prog.plot([], [], 'g-', linewidth=2)
+        ax_prog.set_xlim(0, num_frames)
+        prog_margin = max(0.05, (np.max(task_progress_subset) - np.min(task_progress_subset)) * 0.1)
+        ax_prog.set_ylim(np.min(task_progress_subset) - prog_margin, np.max(task_progress_subset) + prog_margin)
+        ax_prog.set_xlabel('Step')
+        ax_prog.set_ylabel(progress_label)
+        ax_prog.set_title(progress_label, fontsize=12)
+        ax_prog.grid(True, alpha=0.3)
+        dot_prog, = ax_prog.plot([], [], 'go', markersize=6)
 
-    # (1,1) Bottom-middle: reward_hat vs Value gamma=0.90
-    ax_val90 = axes_anim[1, 1]
-    line_rhat4, = ax_val90.plot([], [], 'b-', linewidth=2, label='reward_hat (norm)')
-    line_val90, = ax_val90.plot([], [], 'c--', linewidth=2, label='Value gamma=0.90 (norm)')
-    ax_val90.set_xlim(0, len(reward_hats))
-    ax_val90.set_ylim(-0.05, 1.05)
-    ax_val90.set_xlabel('Step')
-    ax_val90.set_ylabel('Normalized [0, 1]')
-    ax_val90.set_title('reward_hat vs Value (gamma=0.90)', fontsize=12)
-    ax_val90.legend(loc='lower right', fontsize=9)
-    ax_val90.grid(True, alpha=0.3)
-    dot_rhat4, = ax_val90.plot([], [], 'bo', markersize=6)
-    dot_val90, = ax_val90.plot([], [], 'co', markersize=6)
+        plt.suptitle(f'Expert Trajectory Analysis - {env_name}', fontsize=14)
+        plt.tight_layout()
 
-    # (1,2) Bottom-right: reward_hat vs Value gamma=0.99
-    ax_val99 = axes_anim[1, 2]
-    line_rhat5, = ax_val99.plot([], [], 'b-', linewidth=2, label='reward_hat (norm)')
-    line_val99, = ax_val99.plot([], [], 'y-', linewidth=2, label='Value gamma=0.99 (norm)')
-    ax_val99.set_xlim(0, len(reward_hats))
-    ax_val99.set_ylim(-0.05, 1.05)
-    ax_val99.set_xlabel('Step')
-    ax_val99.set_ylabel('Normalized [0, 1]')
-    ax_val99.set_title('reward_hat vs Value (gamma=0.99)', fontsize=12)
-    ax_val99.legend(loc='upper right', fontsize=9)
-    ax_val99.grid(True, alpha=0.3)
-    dot_rhat5, = ax_val99.plot([], [], 'bo', markersize=6)
-    dot_val99, = ax_val99.plot([], [], 'yo', markersize=6)
+        def init():
+            line_rhat.set_data([], [])
+            line_gt.set_data([], [])
+            line_prog.set_data([], [])
+            dot_rhat.set_data([], [])
+            dot_gt.set_data([], [])
+            dot_prog.set_data([], [])
+            step_text.set_text('')
+            return line_rhat, line_gt, line_prog, dot_rhat, dot_gt, dot_prog, step_text, im
 
-    plt.suptitle(f'Expert Trajectory Analysis - {args.env}', fontsize=14)
-    plt.tight_layout()
+        def animate(frame):
+            im.set_array(images_subset[frame])
 
-    def init():
-        """Initialize animation."""
-        line_rhat1.set_data([], [])
-        line_gt.set_data([], [])
-        line_rhat2.set_data([], [])
-        line_prog.set_data([], [])
-        line_rhat3.set_data([], [])
-        line_val75.set_data([], [])
-        line_rhat4.set_data([], [])
-        line_val90.set_data([], [])
-        line_rhat5.set_data([], [])
-        line_val99.set_data([], [])
-        dot_rhat1.set_data([], [])
-        dot_gt.set_data([], [])
-        dot_rhat2.set_data([], [])
-        dot_prog.set_data([], [])
-        dot_rhat3.set_data([], [])
-        dot_val75.set_data([], [])
-        dot_rhat4.set_data([], [])
-        dot_val90.set_data([], [])
-        dot_rhat5.set_data([], [])
-        dot_val99.set_data([], [])
-        step_text.set_text('')
-        return (line_rhat1, line_gt, line_rhat2, line_prog,
-                line_rhat3, line_val75, line_rhat4, line_val90, line_rhat5, line_val99,
-                dot_rhat1, dot_gt, dot_rhat2, dot_prog,
-                dot_rhat3, dot_val75, dot_rhat4, dot_val90, dot_rhat5, dot_val99,
-                step_text, im)
+            status = "SUCCESS!" if success_step_local is not None and frame >= success_step_local else ""
+            step_text.set_text(f'Step: {frame}/{num_frames-1} {status}')
 
-    def animate(frame):
-        """Update each frame."""
-        # Update image
-        im.set_array(images[frame])
+            x_data = np.arange(frame + 1)
 
-        # Update step text
-        status = "SUCCESS!" if success_step is not None and frame >= success_step else ""
-        step_text.set_text(f'Step: {frame}/{len(images)-1} {status}')
+            line_rhat.set_data(x_data, reward_hats_subset[:frame + 1])
+            line_gt.set_data(x_data, gt_rewards_subset[:frame + 1])
+            line_prog.set_data(x_data, task_progress_subset[:frame + 1])
 
-        # Update curves (show up to current frame)
-        x_data = np.arange(frame + 1)
+            dot_rhat.set_data([frame], [reward_hats_subset[frame]])
+            dot_gt.set_data([frame], [gt_rewards_subset[frame]])
+            dot_prog.set_data([frame], [task_progress_subset[frame]])
 
-        # GT Reward
-        line_rhat1.set_data(x_data, reward_hats_norm[:frame + 1])
-        line_gt.set_data(x_data, gt_rewards_norm[:frame + 1])
+            return line_rhat, line_gt, line_prog, dot_rhat, dot_gt, dot_prog, step_text, im
 
-        # Progress
-        line_rhat2.set_data(x_data, reward_hats_norm[:frame + 1])
-        line_prog.set_data(x_data, task_progress_norm[:frame + 1])
+        anim = FuncAnimation(fig, animate, init_func=init,
+                             frames=num_frames, interval=50, blit=True)
 
-        # Value gamma=0.75
-        line_rhat3.set_data(x_data, reward_hats_norm[:frame + 1])
-        line_val75.set_data(x_data, discounted_returns_norm[0.75][:frame + 1])
+        print(f"Saving video to {video_path} ({num_frames} frames, fps={fps})...")
+        writer = FFMpegWriter(fps=fps, metadata=dict(artist='RL-VLM-F'), bitrate=2400)
+        anim.save(video_path, writer=writer)
+        print(f"Saved video to {video_path}")
 
-        # Value gamma=0.90
-        line_rhat4.set_data(x_data, reward_hats_norm[:frame + 1])
-        line_val90.set_data(x_data, discounted_returns_norm[0.90][:frame + 1])
+        plt.close(fig)
 
-        # Value gamma=0.99
-        line_rhat5.set_data(x_data, reward_hats_norm[:frame + 1])
-        line_val99.set_data(x_data, discounted_returns_norm[0.99][:frame + 1])
+    # Generate full video (Original)
+    print(f"\n=== Generating Full Animation Video (Original) ===")
+    video_path_full = os.path.join(args.output_dir, 'trajectory_analysis.mp4')
+    generate_video(images, reward_hats, gt_rewards, task_progress,
+                   video_path_full, args.env, success_step)
 
-        # Update current point markers
-        dot_rhat1.set_data([frame], [reward_hats_norm[frame]])
-        dot_gt.set_data([frame], [gt_rewards_norm[frame]])
-        dot_rhat2.set_data([frame], [reward_hats_norm[frame]])
-        dot_prog.set_data([frame], [task_progress_norm[frame]])
-        dot_rhat3.set_data([frame], [reward_hats_norm[frame]])
-        dot_val75.set_data([frame], [discounted_returns_norm[0.75][frame]])
-        dot_rhat4.set_data([frame], [reward_hats_norm[frame]])
-        dot_val90.set_data([frame], [discounted_returns_norm[0.90][frame]])
-        dot_rhat5.set_data([frame], [reward_hats_norm[frame]])
-        dot_val99.set_data([frame], [discounted_returns_norm[0.99][frame]])
+    # Generate first 30 steps video (10x slower, Original)
+    print(f"\n=== Generating First 30 Steps Video (10x slower, Original) ===")
+    num_frames_short = min(30, len(images))
+    success_step_short = success_step if success_step is not None and success_step < num_frames_short else None
+    video_path_short = os.path.join(args.output_dir, 'trajectory_analysis_first30.mp4')
+    generate_video(images[:num_frames_short], reward_hats[:num_frames_short],
+                   gt_rewards[:num_frames_short], task_progress[:num_frames_short],
+                   video_path_short, args.env, success_step_short, fps=2)
 
-        return (line_rhat1, line_gt, line_rhat2, line_prog,
-                line_rhat3, line_val75, line_rhat4, line_val90, line_rhat5, line_val99,
-                dot_rhat1, dot_gt, dot_rhat2, dot_prog,
-                dot_rhat3, dot_val75, dot_rhat4, dot_val90, dot_rhat5, dot_val99,
-                step_text, im)
+    # Generate pre-success video (Original, 10x slower)
+    if success_step is not None and success_step > 0:
+        print(f"\n=== Generating Pre-Success Video (10x slower, Original) ===")
+        video_path_presuccess = os.path.join(args.output_dir, 'trajectory_analysis_presuccess.mp4')
+        generate_video(images[:pre_success_end], reward_hats[:pre_success_end],
+                       gt_rewards[:pre_success_end], task_progress[:pre_success_end],
+                       video_path_presuccess, args.env + " (Pre-Success)", success_step, fps=2)
 
-    # Create animation (using all frames)
-    anim = FuncAnimation(fig_anim, animate, init_func=init,
-                         frames=len(images), interval=50, blit=True)
+    # Generate full video (Diff form)
+    # For diff, we use images[:-1] since diff has one less element
+    print(f"\n=== Generating Full Animation Video (Diff) ===")
+    video_path_full_diff = os.path.join(args.output_dir, 'trajectory_analysis_diff.mp4')
+    success_step_diff = success_step - 1 if success_step is not None and success_step > 0 else None
+    generate_video(images[:-1], reward_hat_diffs, gt_rewards_for_diff, progress_diffs,
+                   video_path_full_diff, args.env + " (DIFF)", success_step_diff,
+                   reward_label="reward_hat_diff", progress_label="Progress Diff")
 
-    # Save as MP4 video
-    video_path = os.path.join(args.output_dir, 'trajectory_analysis.mp4')
-    print(f"Saving video to {video_path} ({len(images)} frames)...")
-    writer = FFMpegWriter(fps=20, metadata=dict(artist='RL-VLM-F'), bitrate=2400)
-    anim.save(video_path, writer=writer)
-    print(f"Saved video to {video_path}")
+    # Generate first 30 steps video (10x slower, Diff)
+    print(f"\n=== Generating First 30 Steps Video (10x slower, Diff) ===")
+    num_frames_short_diff = min(30, len(reward_hat_diffs))
+    success_step_short_diff = success_step_diff if success_step_diff is not None and success_step_diff < num_frames_short_diff else None
+    video_path_short_diff = os.path.join(args.output_dir, 'trajectory_analysis_first30_diff.mp4')
+    generate_video(images[:num_frames_short_diff], reward_hat_diffs[:num_frames_short_diff],
+                   gt_rewards_for_diff[:num_frames_short_diff], progress_diffs[:num_frames_short_diff],
+                   video_path_short_diff, args.env + " (DIFF)", success_step_short_diff, fps=2,
+                   reward_label="reward_hat_diff", progress_label="Progress Diff")
 
-    plt.close(fig_anim)
+    # Generate pre-success video (Diff form, 10x slower)
+    if success_step is not None and success_step > 1:
+        print(f"\n=== Generating Pre-Success Video (10x slower, Diff) ===")
+        pre_success_end_diff = success_step  # For diff, one less than original
+        video_path_presuccess_diff = os.path.join(args.output_dir, 'trajectory_analysis_presuccess_diff.mp4')
+        generate_video(images[:pre_success_end_diff], reward_hat_diffs[:pre_success_end_diff],
+                       gt_rewards_for_diff[:pre_success_end_diff], progress_diffs[:pre_success_end_diff],
+                       video_path_presuccess_diff, args.env + " (DIFF, Pre-Success)", success_step_diff, fps=2,
+                       reward_label="reward_hat_diff", progress_label="Progress Diff")
 
-    return reward_hats, task_progress
+    return reward_hats, reward_hat_diffs, gt_rewards, task_progress, progress_diffs
 
 
 if __name__ == '__main__':
