@@ -79,6 +79,9 @@ conv_n_channels: [16, 32, 64, 128] # default
 conv_strides: [3, 2, 2, 2] # default
 image_size: 300
 cached_label_path: null
+# progress_diff mode options (only effective when use_progress_diff_reward=true)
+# use_baseline_relabel: if true, relabel uses P(s_{t+1}) instead of P(s_{t+1})-P(s_t)
+use_baseline_relabel: false
 
 # exp_name
 exp_name: gemini_template_1

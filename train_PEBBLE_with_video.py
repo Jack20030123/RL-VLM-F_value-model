@@ -121,13 +121,17 @@ class Workspace(object):
         # Select replay buffer based on mode
         if self.use_progress_diff_reward and self.cfg.image_reward:
             # progress_diff mode: use ProgressDiffReplayBuffer (stores curr & next images)
+            # use_baseline_relabel: if True, relabel uses P(s_{t+1}) instead of P(s_{t+1}) - P(s_t)
+            use_baseline_relabel = bool(getattr(cfg, "use_baseline_relabel", False))
             self.replay_buffer = ProgressDiffReplayBuffer(
                 self.env.observation_space.shape,
                 self.env.action_space.shape,
                 cap,
                 self.device,
-                image_size=image_height)
-            print(f"[ProgressDiff] Using ProgressDiffReplayBuffer with capacity={cap}")
+                image_size=image_height,
+                use_baseline_relabel=use_baseline_relabel)
+            relabel_mode = "baseline P(s_{t+1})" if use_baseline_relabel else "progress_diff P(s_{t+1})-P(s_t)"
+            print(f"[ProgressDiff] Using ProgressDiffReplayBuffer with capacity={cap}, relabel_mode={relabel_mode}")
         else:
             # baseline mode: use original ReplayBuffer
             self.replay_buffer = ReplayBuffer(

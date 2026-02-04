@@ -151,12 +151,18 @@ class ProgressDiffReplayBuffer(object):
     This ensures semantic consistency between:
     - Training time: reward_hat = P(s_{t+1}) - P(s_t)
     - Relabel time:  reward = P(s_{t+1}) - P(s_t)
+
+    When use_baseline_relabel=True:
+    - relabel_with_predictor uses baseline logic: reward = P(s_{t+1})
+    - This allows comparing progress_diff training with baseline relabeling
     """
 
-    def __init__(self, obs_shape, action_shape, capacity, device, window=1, image_size=300):
+    def __init__(self, obs_shape, action_shape, capacity, device, window=1, image_size=300,
+                 use_baseline_relabel=False):
         self.capacity = capacity
         self.device = device
         self.image_size = image_size
+        self.use_baseline_relabel = use_baseline_relabel
 
         # Proprioceptive observations
         obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
@@ -205,9 +211,12 @@ class ProgressDiffReplayBuffer(object):
 
     def relabel_with_predictor(self, predictor):
         """
-        Relabel rewards using progress difference: reward = P(s_{t+1}) - P(s_t)
+        Relabel rewards.
 
-        This maintains semantic consistency with training-time reward computation.
+        If use_baseline_relabel=False (default):
+            reward = P(s_{t+1}) - P(s_t)  (progress difference)
+        If use_baseline_relabel=True:
+            reward = P(s_{t+1})  (baseline style, using next_image)
         """
         batch_size = 1024
         total_samples = self.capacity if self.full else self.idx
@@ -220,22 +229,28 @@ class ProgressDiffReplayBuffer(object):
             start_idx = index * batch_size
             last_index = min((index + 1) * batch_size, total_samples)
 
-            # Prepare curr_images (s_t)
-            curr_imgs = self.curr_images[start_idx:last_index]
-            curr_imgs = np.transpose(curr_imgs, (0, 3, 1, 2))  # HWC -> CHW
-            curr_imgs = curr_imgs.astype(np.float32) / 255.0
-
-            # Prepare next_images (s_{t+1})
+            # Prepare next_images (s_{t+1}) - always needed
             next_imgs = self.next_images[start_idx:last_index]
             next_imgs = np.transpose(next_imgs, (0, 3, 1, 2))  # HWC -> CHW
             next_imgs = next_imgs.astype(np.float32) / 255.0
 
-            # Compute P(s_t) and P(s_{t+1})
-            p_curr = predictor.r_hat_batch(curr_imgs)  # shape: (batch, 1)
-            p_next = predictor.r_hat_batch(next_imgs)  # shape: (batch, 1)
+            if self.use_baseline_relabel:
+                # Baseline relabel: reward = P(s_{t+1})
+                pred_reward = predictor.r_hat_batch(next_imgs)
+            else:
+                # Progress diff relabel: reward = P(s_{t+1}) - P(s_t)
+                # Prepare curr_images (s_t)
+                curr_imgs = self.curr_images[start_idx:last_index]
+                curr_imgs = np.transpose(curr_imgs, (0, 3, 1, 2))  # HWC -> CHW
+                curr_imgs = curr_imgs.astype(np.float32) / 255.0
 
-            # reward = P(s_{t+1}) - P(s_t)
-            pred_reward = p_next - p_curr
+                # Compute P(s_t) and P(s_{t+1})
+                p_curr = predictor.r_hat_batch(curr_imgs)  # shape: (batch, 1)
+                p_next = predictor.r_hat_batch(next_imgs)  # shape: (batch, 1)
+
+                # reward = P(s_{t+1}) - P(s_t)
+                pred_reward = p_next - p_curr
+
             self.rewards[start_idx:last_index] = pred_reward
 
         torch.cuda.empty_cache()
