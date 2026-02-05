@@ -48,7 +48,7 @@ save_video: false
 # Save combined video (env frames + reward_hat plot) - only for successfully completed episodes
 save_env_reward_video_success_only: true
 # Video recording frequency: record every N episodes (set to 0 to disable)
-video_record_frequency: 1
+video_record_frequency: 100
 # Maximum number of training videos to keep
 max_videos_keep: 2000
 
