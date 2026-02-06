@@ -74,9 +74,9 @@ class ReplayBuffer(object):
         
     def relabel_with_predictor(self, predictor):
         if not self.store_image:
-            batch_size = 512
+            batch_size = 256
         else:
-            batch_size = 512
+            batch_size = 256
         total_iter = int(self.idx/batch_size)
         
         if self.idx > batch_size*total_iter:
@@ -218,7 +218,7 @@ class ProgressDiffReplayBuffer(object):
         If use_baseline_relabel=True:
             reward = P(s_{t+1})  (baseline style, using next_image)
         """
-        batch_size = 512
+        batch_size = 256
         total_samples = self.capacity if self.full else self.idx
         total_iter = int(total_samples / batch_size)
 
