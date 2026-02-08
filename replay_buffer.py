@@ -144,17 +144,14 @@ class ProgressDiffReplayBuffer(object):
     """
     Replay buffer for progress_diff mode.
 
-    Key difference from ReplayBuffer:
-    - Stores both curr_image (s_t) and next_image (s_{t+1})
-    - relabel_with_predictor computes P(s_{t+1}) - P(s_t) instead of P(s)
-
-    This ensures semantic consistency between:
-    - Training time: reward_hat = P(s_{t+1}) - P(s_t)
-    - Relabel time:  reward = P(s_{t+1}) - P(s_t)
+    When use_baseline_relabel=False (default):
+    - Stores both curr_image and next_image (~100GB)
+    - relabel: reward = P(s_{t+1}) - P(s_t)
 
     When use_baseline_relabel=True:
-    - relabel_with_predictor uses baseline logic: reward = P(s_{t+1})
-    - This allows comparing progress_diff training with baseline relabeling
+    - Only stores next_image (~50GB, saves memory)
+    - relabel: reward = P(s_{t+1})
+    - Online reward_hat still uses P(s_{t+1}) - P(s_t)
     """
 
     def __init__(self, obs_shape, action_shape, capacity, device, window=1, image_size=300,
@@ -174,8 +171,9 @@ class ProgressDiffReplayBuffer(object):
         self.not_dones_no_max = np.empty((capacity, 1), dtype=np.float32)
         self.window = window
 
-        # Store BOTH curr and next images for progress_diff relabeling
-        self.curr_images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
+        # Only allocate curr_images when needed for pure progress_diff relabel
+        if not use_baseline_relabel:
+            self.curr_images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
         self.next_images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
 
         self.idx = 0
@@ -187,13 +185,6 @@ class ProgressDiffReplayBuffer(object):
 
     def add(self, obs, action, reward, next_obs, done, done_no_max,
             curr_image=None, next_image=None):
-        """
-        Add a transition with both current and next frame images.
-
-        Args:
-            curr_image: Image at state s_t (before action)
-            next_image: Image at state s_{t+1} (after action)
-        """
         np.copyto(self.obses[self.idx], obs)
         np.copyto(self.actions[self.idx], action)
         np.copyto(self.rewards[self.idx], reward)
@@ -201,7 +192,7 @@ class ProgressDiffReplayBuffer(object):
         np.copyto(self.not_dones[self.idx], not done)
         np.copyto(self.not_dones_no_max[self.idx], not done_no_max)
 
-        if curr_image is not None:
+        if curr_image is not None and not self.use_baseline_relabel:
             np.copyto(self.curr_images[self.idx], curr_image)
         if next_image is not None:
             np.copyto(self.next_images[self.idx], next_image)

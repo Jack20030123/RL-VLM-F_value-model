@@ -9,8 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 import cv2
 import os
-import imageio
-import gc
+import imageio  # kept for save_gif
 
 class RewardVideoVisualizer:
     """Visualizer for environment + reward curves"""
@@ -152,25 +151,20 @@ class RewardVideoVisualizer:
         fps = self._calculate_fps(num_frames)
         avg_reward = np.mean(self.rewards)
 
-        # Force garbage collection before spawning ffmpeg subprocess
-        # This helps prevent "Cannot allocate memory" errors during fork()
-        gc.collect()
+        # Use cv2.VideoWriter (no subprocess fork, avoids OOM on large processes)
+        first_frame = self.create_combined_frame(0)
+        h, w = first_frame.shape[:2]
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        writer = cv2.VideoWriter(video_path, fourcc, fps, (w, h))
         try:
-            import torch
-            torch.cuda.empty_cache()
-        except ImportError:
-            pass
-
-        # Use streaming write to avoid loading all frames into memory at once
-        writer = imageio.get_writer(video_path, fps=fps)
-        try:
-            for i in range(num_frames):
+            writer.write(cv2.cvtColor(first_frame, cv2.COLOR_RGB2BGR))
+            self.frames[0] = None
+            for i in range(1, num_frames):
                 combined_frame = self.create_combined_frame(i)
-                writer.append_data(combined_frame)
-                # Clear processed frame to free memory
+                writer.write(cv2.cvtColor(combined_frame, cv2.COLOR_RGB2BGR))
                 self.frames[i] = None
         finally:
-            writer.close()
+            writer.release()
 
         print(f"Video saved to: {video_path}")
         print(f"  - Total frames: {num_frames}")
@@ -214,7 +208,7 @@ class EpisodeRecorder:
         self.saved_videos = []
 
     def should_record(self):
-        return self.episode_count % self.record_frequency == 0
+        return (self.episode_count + 1) % self.record_frequency == 0
 
     def start_episode(self):
         if self.should_record():
