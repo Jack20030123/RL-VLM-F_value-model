@@ -206,8 +206,12 @@ class ProgressDiffReplayBuffer(object):
 
         If use_baseline_relabel=False (default):
             reward = P(s_{t+1}) - P(s_t)  (progress difference)
+            After all diffs are computed, normalize to N(0,1) and return
+            (mean, std) so the caller can apply the same normalization to
+            online EMA rewards, keeping both on the same scale.
         If use_baseline_relabel=True:
             reward = P(s_{t+1})  (baseline style, using next_image)
+            Returns None.
         """
         batch_size = 128
         total_samples = self.capacity if self.full else self.idx
@@ -230,21 +234,29 @@ class ProgressDiffReplayBuffer(object):
                 pred_reward = predictor.r_hat_batch(next_imgs)
             else:
                 # Progress diff relabel: reward = P(s_{t+1}) - P(s_t)
-                # Prepare curr_images (s_t)
                 curr_imgs = self.curr_images[start_idx:last_index]
                 curr_imgs = np.transpose(curr_imgs, (0, 3, 1, 2))  # HWC -> CHW
                 curr_imgs = curr_imgs.astype(np.float32) / 255.0
 
-                # Compute P(s_t) and P(s_{t+1})
                 p_curr = predictor.r_hat_batch(curr_imgs)  # shape: (batch, 1)
                 p_next = predictor.r_hat_batch(next_imgs)  # shape: (batch, 1)
-
-                # reward = P(s_{t+1}) - P(s_t)
                 pred_reward = p_next - p_curr
 
             self.rewards[start_idx:last_index] = pred_reward
 
+        # Progress diff only: normalize all diffs to N(0,1), then return the
+        # statistics so the caller can normalize online EMA rewards the same way.
+        if not self.use_baseline_relabel:
+            all_rewards = self.rewards[:total_samples]
+            mean_r = float(np.mean(all_rewards))
+            std_r  = float(np.std(all_rewards)) + 1e-8
+            self.rewards[:total_samples] = (all_rewards - mean_r) / std_r
+            print(f"[ProgressDiff Relabel] mean={mean_r:.4f}, std={std_r:.4f} -> normalized to N(0,1)")
+            torch.cuda.empty_cache()
+            return mean_r, std_r
+
         torch.cuda.empty_cache()
+        return None
 
     def sample(self, batch_size):
         """Sample a batch of transitions."""

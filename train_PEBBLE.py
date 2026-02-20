@@ -195,6 +195,14 @@ class Workspace(object):
             self.progress_target.eval()
             # Flag to track if reward_model has been updated since last progress_target sync
             self.reward_model_updated = False
+            # EMA state for online reward smoothing: r_t = P(s_{t+1}) - EMA(P(s_t))
+            # _ema_p_curr is reset to None at each episode boundary.
+            self._ema_p_curr = None
+            self._ema_alpha  = float(getattr(cfg, 'ema_alpha', 0.9))
+            # Normalization stats from the last relabeling round.
+            # Before the first relabel, std=1 means no normalization is applied.
+            self._relabel_mean = 0.0
+            self._relabel_std  = 1.0
         else:
             self.progress_target = None
 
@@ -243,6 +251,7 @@ class Workspace(object):
 
             # Previous frame buffer for progress-difference reward during eval
             curr_state_rgb = None
+            ema_p_curr_eval = None  # per-episode EMA for eval (progress_diff only)
 
             while not done:
                 with utils.eval_mode(self.agent):
@@ -294,7 +303,14 @@ class Workspace(object):
                                 target_net.eval()
                                 p_curr = float(target_net.r_hat(curr_state_img))   # P(s_t)
                                 p_next = float(target_net.r_hat(next_state_img))   # P(s_{t+1})
-                                reward_hat = p_next - p_curr
+                                # EMA smoothing + normalization (mirrors train-time logic)
+                                if ema_p_curr_eval is None:
+                                    ema_p_curr_eval = p_curr
+                                else:
+                                    ema_p_curr_eval = (self._ema_alpha * ema_p_curr_eval
+                                                       + (1 - self._ema_alpha) * p_curr)
+                                raw_diff   = p_next - ema_p_curr_eval
+                                reward_hat = (raw_diff - self._relabel_mean) / self._relabel_std
 
                             curr_state_rgb = rgb_image
                     else:
@@ -607,6 +623,10 @@ class Workspace(object):
                 if hasattr(self, '_prev_obj_to_target_pdiff'):
                     del self._prev_obj_to_target_pdiff
 
+                # Reset per-episode EMA at episode boundary (progress_diff only)
+                if self.use_progress_diff_reward:
+                    self._ema_p_curr = None
+
                 # Capture an initial frame for progress-difference reward (train)
                 if self.use_progress_diff_reward and self.cfg.image_reward:
                     if "metaworld" in self.cfg.env:
@@ -660,8 +680,11 @@ class Workspace(object):
 
                     # Relabel replay with the updated model
                     self.reward_model.eval()
-                    self.replay_buffer.relabel_with_predictor(self.reward_model)
+                    relabel_stats = self.replay_buffer.relabel_with_predictor(self.reward_model)
                     self.reward_model.train()
+                    # Save normalization stats for progress_diff online rewards
+                    if self.use_progress_diff_reward and relabel_stats is not None:
+                        self._relabel_mean, self._relabel_std = relabel_stats
 
                 # Reset critic after unsupervised exploration
                 self.agent.reset_critic()
@@ -701,8 +724,11 @@ class Workspace(object):
                         if self.use_progress_diff_reward:
                             self.reward_model_updated = True
                         self.reward_model.eval()
-                        self.replay_buffer.relabel_with_predictor(self.reward_model)
+                        relabel_stats = self.replay_buffer.relabel_with_predictor(self.reward_model)
                         self.reward_model.train()
+                        # Save normalization stats for progress_diff online rewards
+                        if self.use_progress_diff_reward and relabel_stats is not None:
+                            self._relabel_mean, self._relabel_std = relabel_stats
                         interact_count = 0
 
                 self.agent.update(self.replay_buffer, self.logger, self.step, 1)
@@ -775,7 +801,16 @@ class Workspace(object):
                                 p_curr = float(self.progress_target.r_hat(curr_state_img))   # P(s_t)
                                 p_next = float(self.progress_target.r_hat(next_state_img))   # P(s_{t+1})
 
-                            reward_hat = p_next - p_curr
+                            # EMA smoothing of P(s_t) baseline, then normalize
+                            # using statistics from the last relabeling round so
+                            # online rewards and relabeled rewards share the same scale.
+                            if self._ema_p_curr is None:
+                                self._ema_p_curr = p_curr
+                            else:
+                                self._ema_p_curr = (self._ema_alpha * self._ema_p_curr
+                                                    + (1 - self._ema_alpha) * p_curr)
+                            raw_diff   = p_next - self._ema_p_curr
+                            reward_hat = (raw_diff - self._relabel_mean) / self._relabel_std
 
                             # Debug output for progress_diff mode
                             if getattr(self.cfg, 'reward_hat_debug', False) and 'obj_to_target' in extra:

@@ -82,6 +82,9 @@ cached_label_path: null
 # progress_diff mode options (only effective when use_progress_diff_reward=true)
 # use_baseline_relabel: if true, relabel uses P(s_{t+1}) instead of P(s_{t+1})-P(s_t)
 use_baseline_relabel: false
+# ema_alpha: EMA decay for online reward smoothing. 0.9 ≈ 10-step effective window.
+# Larger alpha = smoother but slower to adapt.
+ema_alpha: 0.9
 
 # exp_name
 exp_name: gemini_template_1
