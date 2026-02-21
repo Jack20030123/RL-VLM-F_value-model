@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import utils
+from scipy.signal import savgol_filter
 
 class ReplayBuffer(object):
     """Buffer to store environment transitions."""
@@ -144,24 +145,19 @@ class ProgressDiffReplayBuffer(object):
     """
     Replay buffer for progress_diff mode.
 
-    When use_baseline_relabel=False (default):
-    - Stores both curr_image and next_image (~100GB)
-    - relabel: reward = P(s_{t+1}) - P(s_t)
-
-    When use_baseline_relabel=True:
-    - Only stores next_image (~50GB, saves memory)
-    - relabel: reward = P(s_{t+1})
-    - Online reward_hat still uses P(s_{t+1}) - P(s_t)
+    Online reward_hat = P(s') (same as baseline, no diff online).
+    relabel_with_predictor: computes P(s') for all stored images in batches,
+    then per-episode applies Savitzky-Golay smooth + np.diff.
+    Only stores next_image (self.images), no curr_image needed.
     """
 
-    def __init__(self, obs_shape, action_shape, capacity, device, window=1, image_size=300,
-                 use_baseline_relabel=False):
+    def __init__(self, obs_shape, action_shape, capacity, device, window=1,
+                 image_size=300, smooth_window=21):
         self.capacity = capacity
         self.device = device
         self.image_size = image_size
-        self.use_baseline_relabel = use_baseline_relabel
+        self.smooth_window = smooth_window
 
-        # Proprioceptive observations
         obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
         self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
         self.next_obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
@@ -171,10 +167,8 @@ class ProgressDiffReplayBuffer(object):
         self.not_dones_no_max = np.empty((capacity, 1), dtype=np.float32)
         self.window = window
 
-        # Only allocate curr_images when needed for pure progress_diff relabel
-        if not use_baseline_relabel:
-            self.curr_images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
-        self.next_images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
+        # Only next_image needed; named `images` to match ReplayBuffer interface
+        self.images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
 
         self.idx = 0
         self.last_save = 0
@@ -183,8 +177,7 @@ class ProgressDiffReplayBuffer(object):
     def __len__(self):
         return self.capacity if self.full else self.idx
 
-    def add(self, obs, action, reward, next_obs, done, done_no_max,
-            curr_image=None, next_image=None):
+    def add(self, obs, action, reward, next_obs, done, done_no_max, image=None):
         np.copyto(self.obses[self.idx], obs)
         np.copyto(self.actions[self.idx], action)
         np.copyto(self.rewards[self.idx], reward)
@@ -192,69 +185,60 @@ class ProgressDiffReplayBuffer(object):
         np.copyto(self.not_dones[self.idx], not done)
         np.copyto(self.not_dones_no_max[self.idx], not done_no_max)
 
-        if curr_image is not None and not self.use_baseline_relabel:
-            np.copyto(self.curr_images[self.idx], curr_image)
-        if next_image is not None:
-            np.copyto(self.next_images[self.idx], next_image)
+        if image is not None:
+            np.copyto(self.images[self.idx], image)
 
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
 
     def relabel_with_predictor(self, predictor):
         """
-        Relabel rewards.
+        Relabel rewards using per-episode SG smooth + diff.
 
-        If use_baseline_relabel=False (default):
-            reward = P(s_{t+1}) - P(s_t)  (progress difference)
-            After all diffs are computed, normalize to N(0,1) and return
-            (mean, std) so the caller can apply the same normalization to
-            online EMA rewards, keeping both on the same scale.
-        If use_baseline_relabel=True:
-            reward = P(s_{t+1})  (baseline style, using next_image)
-            Returns None.
+        Steps:
+        1. Batch-compute P(s') for all stored images.
+        2. Walk buffer in chronological order; detect episode ends via not_dones.
+        3. Per episode: Savitzky-Golay smooth the P values, then np.diff.
+           First step of each episode gets reward=0 (no prev state).
+        4. Write results back to self.rewards.
+        Returns None (no statistics needed by caller).
         """
         batch_size = 128
         total_samples = self.capacity if self.full else self.idx
-        total_iter = int(total_samples / batch_size)
 
-        if total_samples > batch_size * total_iter:
-            total_iter += 1
+        # Step 1: compute P(s') for all samples
+        p_values = np.zeros(total_samples, dtype=np.float32)
+        total_iter = int(np.ceil(total_samples / batch_size))
+        for i in range(total_iter):
+            start = i * batch_size
+            end = min((i + 1) * batch_size, total_samples)
+            imgs = self.images[start:end]
+            imgs = np.transpose(imgs, (0, 3, 1, 2)).astype(np.float32) / 255.0
+            p_values[start:end] = predictor.r_hat_batch(imgs).flatten()
 
-        for index in range(total_iter):
-            start_idx = index * batch_size
-            last_index = min((index + 1) * batch_size, total_samples)
+        # Step 2 & 3: per-episode smooth + diff
+        new_rewards = np.zeros(total_samples, dtype=np.float32)
+        sw_base = self.smooth_window if self.smooth_window % 2 == 1 else self.smooth_window + 1
+        sw_base = max(3, sw_base)
 
-            # Prepare next_images (s_{t+1}) - always needed
-            next_imgs = self.next_images[start_idx:last_index]
-            next_imgs = np.transpose(next_imgs, (0, 3, 1, 2))  # HWC -> CHW
-            next_imgs = next_imgs.astype(np.float32) / 255.0
+        episode_start = 0
+        for t in range(total_samples):
+            is_end = (self.not_dones[t, 0] < 0.5) or (t == total_samples - 1)
+            if is_end:
+                ep_p = p_values[episode_start:t + 1]
+                ep_len = len(ep_p)
+                if ep_len < 3:
+                    smooth_ep_p = ep_p.copy()
+                else:
+                    sw = min(sw_base, ep_len if ep_len % 2 == 1 else ep_len - 1)
+                    sw = max(3, sw)
+                    smooth_ep_p = savgol_filter(ep_p, window_length=sw, polyorder=2)
+                # First step reward=0, rest = diff of smoothed values
+                ep_rewards = np.concatenate([[0.0], np.diff(smooth_ep_p)])
+                new_rewards[episode_start:t + 1] = ep_rewards
+                episode_start = t + 1
 
-            if self.use_baseline_relabel:
-                # Baseline relabel: reward = P(s_{t+1})
-                pred_reward = predictor.r_hat_batch(next_imgs)
-            else:
-                # Progress diff relabel: reward = P(s_{t+1}) - P(s_t)
-                curr_imgs = self.curr_images[start_idx:last_index]
-                curr_imgs = np.transpose(curr_imgs, (0, 3, 1, 2))  # HWC -> CHW
-                curr_imgs = curr_imgs.astype(np.float32) / 255.0
-
-                p_curr = predictor.r_hat_batch(curr_imgs)  # shape: (batch, 1)
-                p_next = predictor.r_hat_batch(next_imgs)  # shape: (batch, 1)
-                pred_reward = p_next - p_curr
-
-            self.rewards[start_idx:last_index] = pred_reward
-
-        # Progress diff only: normalize all diffs to N(0,1), then return the
-        # statistics so the caller can normalize online EMA rewards the same way.
-        if not self.use_baseline_relabel:
-            all_rewards = self.rewards[:total_samples]
-            mean_r = float(np.mean(all_rewards))
-            std_r  = float(np.std(all_rewards)) + 1e-8
-            self.rewards[:total_samples] = (all_rewards - mean_r) / std_r
-            print(f"[ProgressDiff Relabel] mean={mean_r:.4f}, std={std_r:.4f} -> normalized to N(0,1)")
-            torch.cuda.empty_cache()
-            return mean_r, std_r
-
+        self.rewards[:total_samples] = new_rewards.reshape(-1, 1)
         torch.cuda.empty_cache()
         return None
 

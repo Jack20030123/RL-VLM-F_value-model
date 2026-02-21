@@ -18,7 +18,6 @@ import torch
 import os
 import time
 import pickle as pkl
-import copy  # Used to build a frozen target network for progress inference
 
 from logger import Logger
 from replay_buffer import ReplayBuffer, ProgressDiffReplayBuffer
@@ -120,18 +119,16 @@ class Workspace(object):
 
         # Select replay buffer based on mode
         if self.use_progress_diff_reward and self.cfg.image_reward:
-            # progress_diff mode: use ProgressDiffReplayBuffer (stores curr & next images)
-            # use_baseline_relabel: if True, relabel uses P(s_{t+1}) instead of P(s_{t+1}) - P(s_t)
-            use_baseline_relabel = bool(getattr(cfg, "use_baseline_relabel", False))
+            # progress_diff mode: online reward = P(s'), relabeling uses per-episode SG smooth + diff
+            smooth_window = int(getattr(cfg, "smooth_window", 21))
             self.replay_buffer = ProgressDiffReplayBuffer(
                 self.env.observation_space.shape,
                 self.env.action_space.shape,
                 cap,
                 self.device,
                 image_size=image_height,
-                use_baseline_relabel=use_baseline_relabel)
-            relabel_mode = "baseline P(s_{t+1})" if use_baseline_relabel else "progress_diff P(s_{t+1})-P(s_t)"
-            print(f"[ProgressDiff] Using ProgressDiffReplayBuffer with capacity={cap}, relabel_mode={relabel_mode}")
+                smooth_window=smooth_window)
+            print(f"[ProgressDiff] Using ProgressDiffReplayBuffer with capacity={cap}, smooth_window={smooth_window}")
         else:
             # baseline mode: use original ReplayBuffer
             self.replay_buffer = ReplayBuffer(
@@ -206,23 +203,7 @@ class Workspace(object):
             print("loading agent model at {}".format(self.cfg.agent_model_load_dir))
             self.agent.load(self.cfg.agent_model_load_dir, 1000000)
 
-        # Target network for progress-difference reward (use_progress_diff_reward already set above)
-        if self.use_progress_diff_reward:
-            # A frozen copy to stabilize P(s) used for r_t = P(s_{t+1}) − P(s_t)
-            self.progress_target = copy.deepcopy(self.reward_model)
-            self.progress_target.eval()
-            # Flag to track if reward_model has been updated since last progress_target sync
-            self.reward_model_updated = False
-            # EMA state for online reward smoothing: r_t = P(s_{t+1}) - EMA(P(s_t))
-            # _ema_p_curr is reset to None at each episode boundary.
-            self._ema_p_curr = None
-            self._ema_alpha  = float(getattr(cfg, 'ema_alpha', 0.9))
-            # Normalization stats from the last relabeling round.
-            # Before the first relabel, std=1 means no normalization is applied.
-            self._relabel_mean = 0.0
-            self._relabel_std  = 1.0
-        else:
-            self.progress_target = None
+        self.progress_target = None
 
         # VIDEO: Initialize video recording system
         print("\n" + "="*60)
@@ -311,10 +292,7 @@ class Workspace(object):
             ep_info = []
             rewards = []
             t_idx = 0
-
-            # Previous frame buffer for progress-difference reward during eval
-            curr_state_rgb = None
-            ema_p_curr_eval = None  # per-episode EMA for eval (progress_diff only)
+            curr_state_rgb = None  # for progress_diff online reward
 
             while not done:
                 with utils.eval_mode(self.agent):
@@ -348,46 +326,33 @@ class Workspace(object):
                 # ===================== reward_hat computation for eval =====================
                 if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                     if self.use_progress_diff_reward and self.cfg.image_reward:
-                        if rgb_image is None:
+                        # Online raw diff: P(s'_{t+1}) - P(s'_t), no EMA/normalization
+                        if rgb_image is None or curr_state_rgb is None:
                             reward_hat = 0.0
                         else:
-                            next_state_img = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0  # s_{t+1}
-                            next_state_img = next_state_img[:, ::self.resize_factor, ::self.resize_factor]
-                            next_state_img = next_state_img.reshape(1, 3, next_state_img.shape[1], next_state_img.shape[2])
-
-                            if curr_state_rgb is None:
-                                reward_hat = 0.0
-                            else:
-                                curr_state_img = curr_state_rgb.transpose(2, 0, 1).astype(np.float32) / 255.0  # s_t
-                                curr_state_img = curr_state_img[:, ::self.resize_factor, ::self.resize_factor]
-                                curr_state_img = curr_state_img.reshape(1, 3, curr_state_img.shape[1], curr_state_img.shape[2])
-
-                                target_net = self.progress_target if self.progress_target is not None else self.reward_model
-                                target_net.eval()
-                                p_curr = float(target_net.r_hat(curr_state_img))   # P(s_t)
-                                p_next = float(target_net.r_hat(next_state_img))   # P(s_{t+1})
-                                # EMA smoothing + normalization (mirrors train-time logic)
-                                if ema_p_curr_eval is None:
-                                    ema_p_curr_eval = p_curr
-                                else:
-                                    ema_p_curr_eval = (self._ema_alpha * ema_p_curr_eval
-                                                       + (1 - self._ema_alpha) * p_curr)
-                                raw_diff   = p_next - ema_p_curr_eval
-                                reward_hat = (raw_diff - self._relabel_mean) / self._relabel_std
-
-                            curr_state_rgb = rgb_image
+                            curr_img = curr_state_rgb.transpose(2, 0, 1).astype(np.float32) / 255.0
+                            curr_img = curr_img[:, ::self.resize_factor, ::self.resize_factor]
+                            curr_img = curr_img.reshape(1, 3, curr_img.shape[1], curr_img.shape[2])
+                            next_img = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
+                            next_img = next_img[:, ::self.resize_factor, ::self.resize_factor]
+                            next_img = next_img.reshape(1, 3, next_img.shape[1], next_img.shape[2])
+                            self.reward_model.eval()
+                            p_curr = float(self.reward_model.r_hat(curr_img))
+                            p_next = float(self.reward_model.r_hat(next_img))
+                            reward_hat = p_next - p_curr
+                            self.reward_model.train()
+                        curr_state_rgb = rgb_image
+                    elif not self.cfg.image_reward:
+                        self.reward_model.eval()
+                        reward_hat = self.reward_model.r_hat(np.concatenate([obs, action], axis=-1))
+                        self.reward_model.train()
                     else:
-                        if not self.cfg.image_reward:
-                            self.reward_model.eval()
-                            reward_hat = self.reward_model.r_hat(np.concatenate([obs, action], axis=-1))
-                            self.reward_model.train()
-                        else:
-                            image = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
-                            image = image[:, ::self.resize_factor, ::self.resize_factor]
-                            image = image.reshape(1, 3, image.shape[1], image.shape[2])
-                            self.reward_model.eval()
-                            reward_hat = self.reward_model.r_hat(image)
-                            self.reward_model.train()
+                        image = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
+                        image = image[:, ::self.resize_factor, ::self.resize_factor]
+                        image = image.reshape(1, 3, image.shape[1], image.shape[2])
+                        self.reward_model.eval()
+                        reward_hat = self.reward_model.r_hat(image)
+                        self.reward_model.train()
 
                 elif self.reward == 'blip2_image_text_matching':
                     query_image = rgb_image
@@ -573,7 +538,7 @@ class Workspace(object):
         vlm_acc = 0
         eval_cnt = 0
 
-        # Previous frame buffer for progress-difference reward
+        # Previous frame buffer for progress-difference online reward
         curr_state_rgb = None
 
         while self.step < self.cfg.num_train_steps:
@@ -650,14 +615,6 @@ class Workspace(object):
                         train_metrics["train/total_success_episodes"] = self.total_success_episodes
                     wandb.log(train_metrics, step=self.step)
 
-                # Update progress_target at episode boundary (only when reward_model has been updated)
-                if self.use_progress_diff_reward and self.reward_model_updated:
-                    # Use load_state_dict instead of deepcopy to avoid OOM
-                    self.progress_target.load_state_dict(self.reward_model.state_dict())
-                    self.progress_target.eval()
-                    self.reward_model_updated = False
-                    print(f"[Episode {episode}] Updated progress_target at step {self.step}")
-
                 if self.metaworld_random_init:
                     # Random seed each episode when metaworld_random_init is True
                     train_seed = self.episode_rng.randint(0, 400)
@@ -687,40 +644,16 @@ class Workspace(object):
                 traj_images = []
                 ep_info = []
 
-                # Debug variables for reward_hat anomaly detection (baseline mode)
+                # Debug variables for reward_hat anomaly detection
                 prev_step = None
                 prev_obj_to_target = None
                 prev_reward_hat = None
                 prev_members = None
-                # Debug variable for progress_diff mode
-                if hasattr(self, '_prev_obj_to_target_pdiff'):
-                    del self._prev_obj_to_target_pdiff
-
-                # Reset per-episode EMA at episode boundary (progress_diff only)
-                if self.use_progress_diff_reward:
-                    self._ema_p_curr = None
+                # Reset previous frame at episode boundary (progress_diff only)
+                curr_state_rgb = None
 
                 # VIDEO: Start new episode recording
                 self.episode_recorder.start_episode()
-
-                # Capture an initial frame for progress-difference reward (train)
-                if self.use_progress_diff_reward and self.cfg.image_reward:
-                    if "metaworld" in self.cfg.env:
-                        curr_state_rgb = self.env.render()
-                        curr_state_rgb = curr_state_rgb[::-1, :, :]
-                        if "drawer" in self.cfg.env or "sweep" in self.cfg.env:
-                            curr_state_rgb = curr_state_rgb[100:400, 100:400, :]
-                    elif self.cfg.env in ["CartPole-v1", "Acrobot-v1", "MountainCar-v0", "Pendulum-v0"]:
-                        curr_state_rgb = self.env.render(mode='rgb_array')
-                    elif 'softgym' in self.cfg.env:
-                        curr_state_rgb = self.env.render(mode='rgb_array', hide_picker=True)
-                    else:
-                        curr_state_rgb = self.env.render(mode='rgb_array')
-
-                    if 'Water' not in self.cfg.env and 'Rope' not in self.cfg.env:
-                        curr_state_rgb = cv2.resize(curr_state_rgb, (self.image_height, self.image_width))
-                else:
-                    curr_state_rgb = None
 
             # Sample an action
             if self.step < self.cfg.num_seed_steps:
@@ -751,16 +684,11 @@ class Workspace(object):
 
                     # First preference learning
                     reward_learning_acc, vlm_acc = self.learn_reward(first_flag=1)
-                    if self.use_progress_diff_reward:
-                        self.reward_model_updated = True
 
                     # Relabel replay with the updated model
                     self.reward_model.eval()
-                    relabel_stats = self.replay_buffer.relabel_with_predictor(self.reward_model)
+                    self.replay_buffer.relabel_with_predictor(self.reward_model)
                     self.reward_model.train()
-                    # Save normalization stats for progress_diff online rewards
-                    if self.use_progress_diff_reward and relabel_stats is not None:
-                        self._relabel_mean, self._relabel_std = relabel_stats
 
                 # Reset critic after unsupervised exploration
                 self.agent.reset_critic()
@@ -797,14 +725,9 @@ class Workspace(object):
                             self.reward_model.set_batch(self.cfg.max_feedback - self.total_feedback)
 
                         reward_learning_acc, vlm_acc = self.learn_reward()
-                        if self.use_progress_diff_reward:
-                            self.reward_model_updated = True
                         self.reward_model.eval()
-                        relabel_stats = self.replay_buffer.relabel_with_predictor(self.reward_model)
+                        self.replay_buffer.relabel_with_predictor(self.reward_model)
                         self.reward_model.train()
-                        # Save normalization stats for progress_diff online rewards
-                        if self.use_progress_diff_reward and relabel_stats is not None:
-                            self._relabel_mean, self._relabel_std = relabel_stats
                         interact_count = 0
 
                 self.agent.update(self.replay_buffer, self.logger, self.step, 1)
@@ -845,146 +768,77 @@ class Workspace(object):
             else:
                 rgb_image = None
 
-            # For per-step W&B logging of progress-diff internals
-            p_next = np.nan  # P(s_{t+1})
-            p_curr = np.nan  # P(s_t)
-
             # ===================== reward computation (train) =====================
+            p_curr = float('nan')
+            p_next = float('nan')
             if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                 if self.use_progress_diff_reward and self.cfg.image_reward:
-                    # Progress-difference: r_t = P(s_{t+1}) - P(s_t)
-                    if rgb_image is None:
+                    # Online raw diff: P(s'_{t+1}) - P(s'_t), no EMA/normalization
+                    if rgb_image is None or curr_state_rgb is None:
                         reward_hat = 0.0
                     else:
-                        next_state_img = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0  # s_{t+1}
-                        next_state_img = next_state_img[:, ::self.resize_factor, ::self.resize_factor]
-                        next_state_img = next_state_img.reshape(1, 3, next_state_img.shape[1], next_state_img.shape[2])
-
-                        if curr_state_rgb is None:
-                            reward_hat = 0.0
-                        else:
-                            curr_state_img = curr_state_rgb.transpose(2, 0, 1).astype(np.float32) / 255.0  # s_t
-                            curr_state_img = curr_state_img[:, ::self.resize_factor, ::self.resize_factor]
-                            curr_state_img = curr_state_img.reshape(1, 3, curr_state_img.shape[1], curr_state_img.shape[2])
-
-                            self.progress_target.eval()
-                            if getattr(self.cfg, 'reward_hat_debug', False):
-                                p_curr, p_curr_members = self.progress_target.r_hat(curr_state_img, return_members=True)  # P(s_t)
-                                p_next, p_next_members = self.progress_target.r_hat(next_state_img, return_members=True)  # P(s_{t+1})
-                                p_curr = float(p_curr)
-                                p_next = float(p_next)
-                            else:
-                                p_curr = float(self.progress_target.r_hat(curr_state_img))   # P(s_t)
-                                p_next = float(self.progress_target.r_hat(next_state_img))   # P(s_{t+1})
-
-                            # EMA smoothing of P(s_t) baseline, then normalize
-                            # using statistics from the last relabeling round so
-                            # online rewards and relabeled rewards share the same scale.
-                            if self._ema_p_curr is None:
-                                self._ema_p_curr = p_curr
-                            else:
-                                self._ema_p_curr = (self._ema_alpha * self._ema_p_curr
-                                                    + (1 - self._ema_alpha) * p_curr)
-                            raw_diff   = p_next - self._ema_p_curr
-                            reward_hat = (raw_diff - self._relabel_mean) / self._relabel_std
-
-                            # Debug output for progress_diff mode
-                            if getattr(self.cfg, 'reward_hat_debug', False) and 'obj_to_target' in extra:
-                                curr_obj_to_target = extra['obj_to_target']
-                                p_curr_members_flat = p_curr_members.flatten()
-                                p_next_members_flat = p_next_members.flatten()
-
-                                # Detect anomalies (for step >= 1)
-                                if episode_step >= 1 and hasattr(self, '_prev_obj_to_target_pdiff'):
-                                    obj_threshold = 0.001  # minimum change to be considered movement
-                                    prev_obj = self._prev_obj_to_target_pdiff
-
-                                    # Print step 1 complete info
-                                    if episode_step == 1:
-                                        print(f"[PROGRESS_DIFF STEP 1] Step {self.step}")
-                                        print(f"  prev_obj_to_target={prev_obj:.4f} -> curr={curr_obj_to_target:.4f} (delta={curr_obj_to_target - prev_obj:.4f})")
-                                        print(f"  p_curr={p_curr:.4f}, p_next={p_next:.4f}, reward_hat={reward_hat:.4f}")
-                                        print(f"  p_curr_members={p_curr_members_flat}, p_next_members={p_next_members_flat}")
-
-                                    # opened more = obj_to_target decreased
-                                    opened_more = curr_obj_to_target < prev_obj - obj_threshold
-                                    # opened less = obj_to_target increased
-                                    opened_less = curr_obj_to_target > prev_obj + obj_threshold
-
-                                    # Anomaly: opened more but reward is negative
-                                    if opened_more and reward_hat < 0:
-                                        print(f"[PROGRESS_DIFF ANOMALY: OPENED_MORE but REWARD<0] Step {self.step}")
-                                        print(f"  prev_obj_to_target={prev_obj:.4f} -> curr={curr_obj_to_target:.4f} (delta={curr_obj_to_target - prev_obj:.4f})")
-                                        print(f"  p_curr={p_curr:.4f}, p_next={p_next:.4f}, reward_hat={reward_hat:.4f}")
-                                        print(f"  p_curr_members={p_curr_members_flat}, p_next_members={p_next_members_flat}")
-
-                                    # Anomaly: opened less but reward is positive
-                                    if opened_less and reward_hat > 0:
-                                        print(f"[PROGRESS_DIFF ANOMALY: OPENED_LESS but REWARD>0] Step {self.step}")
-                                        print(f"  prev_obj_to_target={prev_obj:.4f} -> curr={curr_obj_to_target:.4f} (delta={curr_obj_to_target - prev_obj:.4f})")
-                                        print(f"  p_curr={p_curr:.4f}, p_next={p_next:.4f}, reward_hat={reward_hat:.4f}")
-                                        print(f"  p_curr_members={p_curr_members_flat}, p_next_members={p_next_members_flat}")
-
-                                # Save for next step comparison
-                                self._prev_obj_to_target_pdiff = curr_obj_to_target
-
-                        # Update previous-frame cache with current raw rgb
-                        curr_state_rgb = rgb_image
-
-                        # NOTE: progress_target update moved to episode boundary (see done branch)
-                        # Original step-level update logic commented out to avoid mid-episode updates
-                else:
-                    # Original path: treat reward_model output as immediate reward
-                    if not self.cfg.image_reward:
+                        curr_img = curr_state_rgb.transpose(2, 0, 1).astype(np.float32) / 255.0
+                        curr_img = curr_img[:, ::self.resize_factor, ::self.resize_factor]
+                        curr_img = curr_img.reshape(1, 3, curr_img.shape[1], curr_img.shape[2])
+                        next_img = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
+                        next_img = next_img[:, ::self.resize_factor, ::self.resize_factor]
+                        next_img = next_img.reshape(1, 3, next_img.shape[1], next_img.shape[2])
                         self.reward_model.eval()
-                        if getattr(self.cfg, 'reward_hat_debug', False):
-                            reward_hat, r_hats_each = self.reward_model.r_hat(
-                                np.concatenate([obs, action], axis=-1), return_members=True)
-                        else:
-                            reward_hat = self.reward_model.r_hat(np.concatenate([obs, action], axis=-1))
+                        p_curr = float(self.reward_model.r_hat(curr_img))
+                        p_next = float(self.reward_model.r_hat(next_img))
+                        reward_hat = p_next - p_curr
                         self.reward_model.train()
+                    curr_state_rgb = rgb_image
+                elif not self.cfg.image_reward:
+                    self.reward_model.eval()
+                    if getattr(self.cfg, 'reward_hat_debug', False):
+                        reward_hat, r_hats_each = self.reward_model.r_hat(
+                            np.concatenate([obs, action], axis=-1), return_members=True)
                     else:
-                        image = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
-                        image = image[:, ::self.resize_factor, ::self.resize_factor]
-                        image = image.reshape(1, 3, image.shape[1], image.shape[2])
-                        self.reward_model.eval()
-                        if getattr(self.cfg, 'reward_hat_debug', False):
-                            reward_hat, r_hats_each = self.reward_model.r_hat(image, return_members=True)
-                        else:
-                            reward_hat = self.reward_model.r_hat(image)
-                        self.reward_model.train()
+                        reward_hat = self.reward_model.r_hat(np.concatenate([obs, action], axis=-1))
+                    self.reward_model.train()
+                else:
+                    image = rgb_image.transpose(2, 0, 1).astype(np.float32) / 255.0
+                    image = image[:, ::self.resize_factor, ::self.resize_factor]
+                    image = image.reshape(1, 3, image.shape[1], image.shape[2])
+                    self.reward_model.eval()
+                    if getattr(self.cfg, 'reward_hat_debug', False):
+                        reward_hat, r_hats_each = self.reward_model.r_hat(image, return_members=True)
+                    else:
+                        reward_hat = self.reward_model.r_hat(image)
+                    self.reward_model.train()
 
-                    # Debug: detect anomalies in reward_hat
-                    if getattr(self.cfg, 'reward_hat_debug', False) and 'obj_to_target' in extra:
-                        curr_obj_to_target = extra['obj_to_target']
-                        curr_members = r_hats_each.flatten()
+                # Debug: detect anomalies in reward_hat (baseline mode only)
+                if not self.use_progress_diff_reward and getattr(self.cfg, 'reward_hat_debug', False) and 'obj_to_target' in extra:
+                    curr_obj_to_target = extra['obj_to_target']
+                    curr_members = r_hats_each.flatten()
 
-                        # Always print episode step 0 info
-                        if episode_step == 0:
-                            print(f"[EPISODE START] Step {self.step}: obj_to_target={curr_obj_to_target:.4f}, reward_hat={reward_hat:.3f}, members={curr_members}")
+                    # Always print episode step 0 info
+                    if episode_step == 0:
+                        print(f"[EPISODE START] Step {self.step}: obj_to_target={curr_obj_to_target:.4f}, reward_hat={reward_hat:.3f}, members={curr_members}")
 
-                        # Detect anomalies (only after step 0)
-                        if prev_obj_to_target is not None and prev_reward_hat is not None:
-                            obj_threshold = 0.001  # minimum change in obj_to_target to be considered movement
-                            reward_threshold = 0.05  # minimum change in reward_hat to be considered significant
+                    # Detect anomalies (only after step 0)
+                    if prev_obj_to_target is not None and prev_reward_hat is not None:
+                        obj_threshold = 0.001  # minimum change in obj_to_target to be considered movement
+                        reward_threshold = 0.05  # minimum change in reward_hat to be considered significant
 
-                            # Case 1: opened more (obj_to_target decreased) but reward dropped
-                            opened_more = curr_obj_to_target < prev_obj_to_target - obj_threshold
-                            reward_dropped = reward_hat < prev_reward_hat - reward_threshold
-                            # Case 2: opened less (obj_to_target increased) but reward increased
-                            opened_less = curr_obj_to_target > prev_obj_to_target + obj_threshold
-                            reward_increased = reward_hat > prev_reward_hat + reward_threshold
+                        # Case 1: opened more (obj_to_target decreased) but reward dropped
+                        opened_more = curr_obj_to_target < prev_obj_to_target - obj_threshold
+                        reward_dropped = reward_hat < prev_reward_hat - reward_threshold
+                        # Case 2: opened less (obj_to_target increased) but reward increased
+                        opened_less = curr_obj_to_target > prev_obj_to_target + obj_threshold
+                        reward_increased = reward_hat > prev_reward_hat + reward_threshold
 
-                            if (opened_more and reward_dropped) or (opened_less and reward_increased):
-                                anomaly_type = "BETTER->WORSE" if opened_more else "WORSE->BETTER"
-                                print(f"[ANOMALY {anomaly_type}]")
-                                print(f"  Step {prev_step}: obj_to_target={prev_obj_to_target:.4f}, reward_hat={prev_reward_hat:.3f}, members={prev_members}")
-                                print(f"  Step {self.step}: obj_to_target={curr_obj_to_target:.4f}, reward_hat={reward_hat:.3f}, members={curr_members}")
+                        if (opened_more and reward_dropped) or (opened_less and reward_increased):
+                            anomaly_type = "BETTER->WORSE" if opened_more else "WORSE->BETTER"
+                            print(f"[ANOMALY {anomaly_type}]")
+                            print(f"  Step {prev_step}: obj_to_target={prev_obj_to_target:.4f}, reward_hat={prev_reward_hat:.3f}, members={prev_members}")
+                            print(f"  Step {self.step}: obj_to_target={curr_obj_to_target:.4f}, reward_hat={reward_hat:.3f}, members={curr_members}")
 
-                        prev_step = self.step
-                        prev_obj_to_target = curr_obj_to_target
-                        prev_reward_hat = reward_hat
-                        prev_members = curr_members
+                    prev_step = self.step
+                    prev_obj_to_target = curr_obj_to_target
+                    prev_reward_hat = reward_hat
+                    prev_members = curr_members
 
             elif self.reward == 'blip2_image_text_matching':
                 query_image = rgb_image
@@ -1024,12 +878,12 @@ class Workspace(object):
 
             # Per-step W&B logging (scalars)
             log_dict = {
-                "train/reward_hat": float(reward_hat),   # baseline & progress_diff
-                "train/true_reward": float(reward),      # environment true reward
+                "train/reward_hat": float(reward_hat),
+                "train/true_reward": float(reward),
             }
             if self.use_progress_diff_reward and self.cfg.image_reward:
-                log_dict["train/p_next"] = float(p_next)   # P(s_{t+1})
-                log_dict["train/p_curr"] = float(p_curr)   # P(s_t)
+                log_dict["train/p_curr"] = p_curr
+                log_dict["train/p_next"] = p_next
             wandb.log(log_dict, step=self.step)
 
             # Allow infinite bootstrap
@@ -1051,17 +905,9 @@ class Workspace(object):
 
             # Push transition into replay buffer (image/non-image paths)
             if self.cfg.image_reward and self.reward not in ["gt_task_reward", "sparse_task_reward"]:
-                if self.use_progress_diff_reward:
-                    # progress_diff mode: store both curr_image (s_t) and next_image (s_{t+1})
-                    self.replay_buffer.add(
-                        obs, action, reward_hat, next_obs, done, done_no_max,
-                        curr_image=curr_state_rgb[::self.resize_factor, ::self.resize_factor, :],
-                        next_image=rgb_image[::self.resize_factor, ::self.resize_factor, :])
-                else:
-                    # baseline mode: store only current frame
-                    self.replay_buffer.add(
-                        obs, action, reward_hat, next_obs, done, done_no_max,
-                        image=rgb_image[::self.resize_factor, ::self.resize_factor, :])
+                self.replay_buffer.add(
+                    obs, action, reward_hat, next_obs, done, done_no_max,
+                    image=rgb_image[::self.resize_factor, ::self.resize_factor, :])
             else:
                 self.replay_buffer.add(
                     obs, action, reward_hat, next_obs, done, done_no_max)
