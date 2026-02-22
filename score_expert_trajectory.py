@@ -265,6 +265,17 @@ def main():
     # Padded version (prepend 0) for video display: frame t shows smooth_P(t)-smooth_P(t-1)
     smooth_reward_hat_diffs_padded = np.concatenate([[0.0], smooth_reward_hat_diffs])
 
+    # Mirror-padded smooth: prepend/append reflected data before SG filter to fix boundary effect
+    half_w = sw // 2
+    if half_w > 0 and len(reward_hats) > half_w:
+        padded_rh = np.concatenate([reward_hats[:half_w][::-1], reward_hats, reward_hats[-half_w:][::-1]])
+    else:
+        padded_rh = reward_hats.copy()
+    mirror_smooth_reward_hats = savgol_filter(padded_rh, window_length=sw, polyorder=2)[half_w: half_w + len(reward_hats)]
+    print(f"Applied mirror-padded Savitzky-Golay smoothing: window={sw}, half_w={half_w}, polyorder=2")
+    mirror_smooth_reward_hat_diffs = np.diff(mirror_smooth_reward_hats)
+    mirror_smooth_reward_hat_diffs_padded = np.concatenate([[0.0], mirror_smooth_reward_hat_diffs])
+
     # Statistics
     print(f"\n=== Statistics ===")
     print(f"Num frames:                  {len(reward_hats)}")
@@ -272,6 +283,8 @@ def main():
     print(f"Smooth_reward_hat range:     [{np.min(smooth_reward_hats):.6f}, {np.max(smooth_reward_hats):.6f}]")
     print(f"Reward_hat_diff range:       [{np.min(reward_hat_diffs):.6f}, {np.max(reward_hat_diffs):.6f}]")
     print(f"Smooth_reward_hat_diff range:[{np.min(smooth_reward_hat_diffs):.6f}, {np.max(smooth_reward_hat_diffs):.6f}]")
+    print(f"Mirror_smooth_rhat range:    [{np.min(mirror_smooth_reward_hats):.6f}, {np.max(mirror_smooth_reward_hats):.6f}]")
+    print(f"Mirror_smooth_rhat_diff range:[{np.min(mirror_smooth_reward_hat_diffs):.6f}, {np.max(mirror_smooth_reward_hat_diffs):.6f}]")
     print(f"GT reward range:             [{np.min(gt_rewards):.6f}, {np.max(gt_rewards):.6f}]")
     print(f"Task progress range:         [{np.min(task_progress):.6f}, {np.max(task_progress):.6f}]")
     print(f"Progress diff range:         [{np.min(progress_diffs):.6f}, {np.max(progress_diffs):.6f}]")
@@ -367,6 +380,49 @@ def main():
     spearman_pdiff_sdiff_first30, _ = spearmanr(smooth_reward_hat_diffs[:first_n_sdiff], progress_diffs[:first_n_sdiff])
     print(f"smooth_diff vs Progress Diff:  Pearson={pearson_pdiff_sdiff_first30:.4f} (p={p_pdiff_sdiff_first30:.2e}), Spearman={spearman_pdiff_sdiff_first30:.4f}")
 
+    # Correlation analysis - All steps (Mirror Smooth form)
+    print(f"\n=== Correlation Analysis: MIRROR SMOOTH reward_hat (All Steps, n={len(mirror_smooth_reward_hats)}) ===")
+
+    pearson_gt_msmooth_all, p_gt_msmooth_all = pearsonr(mirror_smooth_reward_hats, gt_rewards)
+    spearman_gt_msmooth_all, _ = spearmanr(mirror_smooth_reward_hats, gt_rewards)
+    print(f"mirror_smooth_rhat vs GT Reward:      Pearson={pearson_gt_msmooth_all:.4f} (p={p_gt_msmooth_all:.2e}), Spearman={spearman_gt_msmooth_all:.4f}")
+
+    pearson_prog_msmooth_all, p_prog_msmooth_all = pearsonr(mirror_smooth_reward_hats, task_progress)
+    spearman_prog_msmooth_all, _ = spearmanr(mirror_smooth_reward_hats, task_progress)
+    print(f"mirror_smooth_rhat vs Task Progress:  Pearson={pearson_prog_msmooth_all:.4f} (p={p_prog_msmooth_all:.2e}), Spearman={spearman_prog_msmooth_all:.4f}")
+
+    print(f"\n=== Correlation Analysis: MIRROR SMOOTH DIFF (All Steps, n={len(mirror_smooth_reward_hat_diffs)}) ===")
+
+    pearson_gt_msdiff_all, p_gt_msdiff_all = pearsonr(mirror_smooth_reward_hat_diffs, gt_rewards_for_diff)
+    spearman_gt_msdiff_all, _ = spearmanr(mirror_smooth_reward_hat_diffs, gt_rewards_for_diff)
+    print(f"mirror_smooth_diff vs GT Reward:      Pearson={pearson_gt_msdiff_all:.4f} (p={p_gt_msdiff_all:.2e}), Spearman={spearman_gt_msdiff_all:.4f}")
+
+    pearson_pdiff_msdiff_all, p_pdiff_msdiff_all = pearsonr(mirror_smooth_reward_hat_diffs, progress_diffs)
+    spearman_pdiff_msdiff_all, _ = spearmanr(mirror_smooth_reward_hat_diffs, progress_diffs)
+    print(f"mirror_smooth_diff vs Progress Diff:  Pearson={pearson_pdiff_msdiff_all:.4f} (p={p_pdiff_msdiff_all:.2e}), Spearman={spearman_pdiff_msdiff_all:.4f}")
+
+    # Correlation analysis - First 30 steps (Mirror Smooth form)
+    print(f"\n=== Correlation Analysis: MIRROR SMOOTH reward_hat (First {first_n} Steps) ===")
+
+    pearson_gt_msmooth_first30, p_gt_msmooth_first30 = pearsonr(mirror_smooth_reward_hats[:first_n], gt_rewards[:first_n])
+    spearman_gt_msmooth_first30, _ = spearmanr(mirror_smooth_reward_hats[:first_n], gt_rewards[:first_n])
+    print(f"mirror_smooth_rhat vs GT Reward:      Pearson={pearson_gt_msmooth_first30:.4f} (p={p_gt_msmooth_first30:.2e}), Spearman={spearman_gt_msmooth_first30:.4f}")
+
+    pearson_prog_msmooth_first30, p_prog_msmooth_first30 = pearsonr(mirror_smooth_reward_hats[:first_n], task_progress[:first_n])
+    spearman_prog_msmooth_first30, _ = spearmanr(mirror_smooth_reward_hats[:first_n], task_progress[:first_n])
+    print(f"mirror_smooth_rhat vs Task Progress:  Pearson={pearson_prog_msmooth_first30:.4f} (p={p_prog_msmooth_first30:.2e}), Spearman={spearman_prog_msmooth_first30:.4f}")
+
+    first_n_msdiff = min(30, len(mirror_smooth_reward_hat_diffs))
+    print(f"\n=== Correlation Analysis: MIRROR SMOOTH DIFF (First {first_n_msdiff} Steps) ===")
+
+    pearson_gt_msdiff_first30, p_gt_msdiff_first30 = pearsonr(mirror_smooth_reward_hat_diffs[:first_n_msdiff], gt_rewards_for_diff[:first_n_msdiff])
+    spearman_gt_msdiff_first30, _ = spearmanr(mirror_smooth_reward_hat_diffs[:first_n_msdiff], gt_rewards_for_diff[:first_n_msdiff])
+    print(f"mirror_smooth_diff vs GT Reward:      Pearson={pearson_gt_msdiff_first30:.4f} (p={p_gt_msdiff_first30:.2e}), Spearman={spearman_gt_msdiff_first30:.4f}")
+
+    pearson_pdiff_msdiff_first30, p_pdiff_msdiff_first30 = pearsonr(mirror_smooth_reward_hat_diffs[:first_n_msdiff], progress_diffs[:first_n_msdiff])
+    spearman_pdiff_msdiff_first30, _ = spearmanr(mirror_smooth_reward_hat_diffs[:first_n_msdiff], progress_diffs[:first_n_msdiff])
+    print(f"mirror_smooth_diff vs Progress Diff:  Pearson={pearson_pdiff_msdiff_first30:.4f} (p={p_pdiff_msdiff_first30:.2e}), Spearman={spearman_pdiff_msdiff_first30:.4f}")
+
     # Correlation analysis - Pre-success
     if success_step is not None:
         pre_success_end = success_step + 1
@@ -423,12 +479,39 @@ def main():
             pearson_pdiff_sdiff_pre, p_pdiff_sdiff_pre = pearsonr(smooth_reward_hat_diffs_pre, progress_diffs_pre)
             spearman_pdiff_sdiff_pre, _ = spearmanr(smooth_reward_hat_diffs_pre, progress_diffs_pre)
             print(f"smooth_diff vs Progress Diff:  Pearson={pearson_pdiff_sdiff_pre:.4f} (p={p_pdiff_sdiff_pre:.2e}), Spearman={spearman_pdiff_sdiff_pre:.4f}")
+
+            # Mirror Smooth form - Pre-success
+            mirror_smooth_reward_hats_pre = mirror_smooth_reward_hats[:pre_success_end]
+            mirror_smooth_reward_hat_diffs_pre = mirror_smooth_reward_hat_diffs[:pre_success_end - 1]
+
+            print(f"\n=== Correlation Analysis: MIRROR SMOOTH reward_hat (Pre-Success, steps 0-{success_step}, n={pre_success_end}) ===")
+
+            pearson_gt_msmooth_pre, p_gt_msmooth_pre = pearsonr(mirror_smooth_reward_hats_pre, gt_rewards_pre)
+            spearman_gt_msmooth_pre, _ = spearmanr(mirror_smooth_reward_hats_pre, gt_rewards_pre)
+            print(f"mirror_smooth_rhat vs GT Reward:      Pearson={pearson_gt_msmooth_pre:.4f} (p={p_gt_msmooth_pre:.2e}), Spearman={spearman_gt_msmooth_pre:.4f}")
+
+            pearson_prog_msmooth_pre, p_prog_msmooth_pre = pearsonr(mirror_smooth_reward_hats_pre, task_progress_pre)
+            spearman_prog_msmooth_pre, _ = spearmanr(mirror_smooth_reward_hats_pre, task_progress_pre)
+            print(f"mirror_smooth_rhat vs Task Progress:  Pearson={pearson_prog_msmooth_pre:.4f} (p={p_prog_msmooth_pre:.2e}), Spearman={spearman_prog_msmooth_pre:.4f}")
+
+            print(f"\n=== Correlation Analysis: MIRROR SMOOTH DIFF (Pre-Success, steps 0-{success_step-1}, n={len(mirror_smooth_reward_hat_diffs_pre)}) ===")
+
+            pearson_gt_msdiff_pre, p_gt_msdiff_pre = pearsonr(mirror_smooth_reward_hat_diffs_pre, gt_rewards_diff_pre)
+            spearman_gt_msdiff_pre, _ = spearmanr(mirror_smooth_reward_hat_diffs_pre, gt_rewards_diff_pre)
+            print(f"mirror_smooth_diff vs GT Reward:      Pearson={pearson_gt_msdiff_pre:.4f} (p={p_gt_msdiff_pre:.2e}), Spearman={spearman_gt_msdiff_pre:.4f}")
+
+            pearson_pdiff_msdiff_pre, p_pdiff_msdiff_pre = pearsonr(mirror_smooth_reward_hat_diffs_pre, progress_diffs_pre)
+            spearman_pdiff_msdiff_pre, _ = spearmanr(mirror_smooth_reward_hat_diffs_pre, progress_diffs_pre)
+            print(f"mirror_smooth_diff vs Progress Diff:  Pearson={pearson_pdiff_msdiff_pre:.4f} (p={p_pdiff_msdiff_pre:.2e}), Spearman={spearman_pdiff_msdiff_pre:.4f}")
         else:
             pearson_gt_diff_pre, p_gt_diff_pre, spearman_gt_diff_pre = None, None, None
             pearson_progdiff_diff_pre, p_progdiff_diff_pre, spearman_progdiff_diff_pre = None, None, None
             pearson_gt_smooth_pre = pearson_prog_smooth_pre = pearson_gt_sdiff_pre = pearson_pdiff_sdiff_pre = None
             p_gt_smooth_pre = p_prog_smooth_pre = p_gt_sdiff_pre = p_pdiff_sdiff_pre = None
             spearman_gt_smooth_pre = spearman_prog_smooth_pre = spearman_gt_sdiff_pre = spearman_pdiff_sdiff_pre = None
+            pearson_gt_msmooth_pre = pearson_prog_msmooth_pre = pearson_gt_msdiff_pre = pearson_pdiff_msdiff_pre = None
+            p_gt_msmooth_pre = p_prog_msmooth_pre = p_gt_msdiff_pre = p_pdiff_msdiff_pre = None
+            spearman_gt_msmooth_pre = spearman_prog_msmooth_pre = spearman_gt_msdiff_pre = spearman_pdiff_msdiff_pre = None
     else:
         pearson_gt_pre, p_gt_pre, spearman_gt_pre = None, None, None
         pearson_prog_pre, p_prog_pre, spearman_prog_pre = None, None, None
@@ -437,6 +520,9 @@ def main():
         pearson_gt_smooth_pre = pearson_prog_smooth_pre = pearson_gt_sdiff_pre = pearson_pdiff_sdiff_pre = None
         p_gt_smooth_pre = p_prog_smooth_pre = p_gt_sdiff_pre = p_pdiff_sdiff_pre = None
         spearman_gt_smooth_pre = spearman_prog_smooth_pre = spearman_gt_sdiff_pre = spearman_pdiff_sdiff_pre = None
+        pearson_gt_msmooth_pre = pearson_prog_msmooth_pre = pearson_gt_msdiff_pre = pearson_pdiff_msdiff_pre = None
+        p_gt_msmooth_pre = p_prog_msmooth_pre = p_gt_msdiff_pre = p_pdiff_msdiff_pre = None
+        spearman_gt_msmooth_pre = spearman_prog_msmooth_pre = spearman_gt_msdiff_pre = spearman_pdiff_msdiff_pre = None
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -554,6 +640,55 @@ def main():
             f.write(f"smooth_diff vs Progress Diff:\n")
             f.write(f"  Pearson:  {pearson_pdiff_sdiff_pre:.6f} (p={p_pdiff_sdiff_pre:.2e})\n")
             f.write(f"  Spearman: {spearman_pdiff_sdiff_pre:.6f}\n")
+
+        f.write(f"\n\n{'='*60}\n")
+        f.write(f"MIRROR SMOOTH reward_hat = savgol(mirror_pad(model(s)), window={sw})\n")
+        f.write(f"MIRROR SMOOTH DIFF       = diff(mirror_smooth_reward_hat)\n")
+        f.write(f"(mirror padding: reflect half_w={half_w} frames at each end before smoothing)\n")
+        f.write(f"{'='*60}\n\n")
+
+        f.write(f"=== All Steps (n={len(mirror_smooth_reward_hats)}) ===\n")
+        f.write(f"mirror_smooth_rhat vs GT Reward:\n")
+        f.write(f"  Pearson:  {pearson_gt_msmooth_all:.6f} (p={p_gt_msmooth_all:.2e})\n")
+        f.write(f"  Spearman: {spearman_gt_msmooth_all:.6f}\n\n")
+        f.write(f"mirror_smooth_rhat vs Task Progress:\n")
+        f.write(f"  Pearson:  {pearson_prog_msmooth_all:.6f} (p={p_prog_msmooth_all:.2e})\n")
+        f.write(f"  Spearman: {spearman_prog_msmooth_all:.6f}\n\n")
+        f.write(f"mirror_smooth_diff vs GT Reward:\n")
+        f.write(f"  Pearson:  {pearson_gt_msdiff_all:.6f} (p={p_gt_msdiff_all:.2e})\n")
+        f.write(f"  Spearman: {spearman_gt_msdiff_all:.6f}\n\n")
+        f.write(f"mirror_smooth_diff vs Progress Diff:\n")
+        f.write(f"  Pearson:  {pearson_pdiff_msdiff_all:.6f} (p={p_pdiff_msdiff_all:.2e})\n")
+        f.write(f"  Spearman: {spearman_pdiff_msdiff_all:.6f}\n\n")
+
+        f.write(f"=== First {first_n} Steps ===\n")
+        f.write(f"mirror_smooth_rhat vs GT Reward:\n")
+        f.write(f"  Pearson:  {pearson_gt_msmooth_first30:.6f} (p={p_gt_msmooth_first30:.2e})\n")
+        f.write(f"  Spearman: {spearman_gt_msmooth_first30:.6f}\n\n")
+        f.write(f"mirror_smooth_rhat vs Task Progress:\n")
+        f.write(f"  Pearson:  {pearson_prog_msmooth_first30:.6f} (p={p_prog_msmooth_first30:.2e})\n")
+        f.write(f"  Spearman: {spearman_prog_msmooth_first30:.6f}\n\n")
+        f.write(f"mirror_smooth_diff vs GT Reward:\n")
+        f.write(f"  Pearson:  {pearson_gt_msdiff_first30:.6f} (p={p_gt_msdiff_first30:.2e})\n")
+        f.write(f"  Spearman: {spearman_gt_msdiff_first30:.6f}\n\n")
+        f.write(f"mirror_smooth_diff vs Progress Diff:\n")
+        f.write(f"  Pearson:  {pearson_pdiff_msdiff_first30:.6f} (p={p_pdiff_msdiff_first30:.2e})\n")
+        f.write(f"  Spearman: {spearman_pdiff_msdiff_first30:.6f}\n\n")
+
+        if success_step is not None and pre_success_end > 1:
+            f.write(f"=== Pre-Success (steps 0-{success_step}, n={pre_success_end}) ===\n")
+            f.write(f"mirror_smooth_rhat vs GT Reward:\n")
+            f.write(f"  Pearson:  {pearson_gt_msmooth_pre:.6f} (p={p_gt_msmooth_pre:.2e})\n")
+            f.write(f"  Spearman: {spearman_gt_msmooth_pre:.6f}\n\n")
+            f.write(f"mirror_smooth_rhat vs Task Progress:\n")
+            f.write(f"  Pearson:  {pearson_prog_msmooth_pre:.6f} (p={p_prog_msmooth_pre:.2e})\n")
+            f.write(f"  Spearman: {spearman_prog_msmooth_pre:.6f}\n\n")
+            f.write(f"mirror_smooth_diff vs GT Reward:\n")
+            f.write(f"  Pearson:  {pearson_gt_msdiff_pre:.6f} (p={p_gt_msdiff_pre:.2e})\n")
+            f.write(f"  Spearman: {spearman_gt_msdiff_pre:.6f}\n\n")
+            f.write(f"mirror_smooth_diff vs Progress Diff:\n")
+            f.write(f"  Pearson:  {pearson_pdiff_msdiff_pre:.6f} (p={p_pdiff_msdiff_pre:.2e})\n")
+            f.write(f"  Spearman: {spearman_pdiff_msdiff_pre:.6f}\n")
 
     print(f"Saved correlation analysis to {corr_path}")
 
@@ -821,6 +956,37 @@ def main():
                               smooth_reward_hat_diffs_padded[:pre_success_end],
                               gt_rewards[:pre_success_end],
                               video_path_presuccess_smooth, args.env + " (Pre-Success)",
+                              success_step, fps=2)
+
+    # -----------------------------------------------------------------------
+    # Mirror smooth videos
+    # -----------------------------------------------------------------------
+    # Generate full mirror smooth video
+    print(f"\n=== Generating Full Animation Video (Mirror Smooth) ===")
+    video_path_msmooth = os.path.join(args.output_dir, 'trajectory_analysis_mirror_smooth.mp4')
+    generate_video_smooth(images, mirror_smooth_reward_hats, mirror_smooth_reward_hat_diffs_padded,
+                          gt_rewards, video_path_msmooth, args.env, success_step)
+
+    # Generate first 30 steps mirror smooth video
+    print(f"\n=== Generating First 30 Steps Video (10x slower, Mirror Smooth) ===")
+    num_frames_short_msmooth = min(30, len(images))
+    success_step_short_msmooth = success_step if success_step is not None and success_step < num_frames_short_msmooth else None
+    video_path_short_msmooth = os.path.join(args.output_dir, 'trajectory_analysis_first30_mirror_smooth.mp4')
+    generate_video_smooth(images[:num_frames_short_msmooth],
+                          mirror_smooth_reward_hats[:num_frames_short_msmooth],
+                          mirror_smooth_reward_hat_diffs_padded[:num_frames_short_msmooth],
+                          gt_rewards[:num_frames_short_msmooth],
+                          video_path_short_msmooth, args.env, success_step_short_msmooth, fps=2)
+
+    # Generate pre-success mirror smooth video
+    if success_step is not None and success_step > 0:
+        print(f"\n=== Generating Pre-Success Video (10x slower, Mirror Smooth) ===")
+        video_path_presuccess_msmooth = os.path.join(args.output_dir, 'trajectory_analysis_presuccess_mirror_smooth.mp4')
+        generate_video_smooth(images[:pre_success_end],
+                              mirror_smooth_reward_hats[:pre_success_end],
+                              mirror_smooth_reward_hat_diffs_padded[:pre_success_end],
+                              gt_rewards[:pre_success_end],
+                              video_path_presuccess_msmooth, args.env + " (Pre-Success)",
                               success_step, fps=2)
 
     return reward_hats, reward_hat_diffs, gt_rewards, task_progress, progress_diffs
