@@ -60,3 +60,5 @@ reward=learn_from_preference
 vlm_label=1
 softgym/softgym/cached_initial_states/cloth_fold_diagnal_init_states.pkl
 *.zip
+
+scripts/
