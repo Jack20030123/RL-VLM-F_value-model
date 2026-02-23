@@ -181,6 +181,7 @@ class Workspace(object):
             log_dir=self.logger._log_dir,
             flip_vlm_label=cfg.flip_vlm_label,
             cached_label_path=cfg.cached_label_path,
+            save_query_interval=cfg.save_query_interval,
 
             # Image-based reward/progress model parameters
             image_reward=cfg.image_reward,

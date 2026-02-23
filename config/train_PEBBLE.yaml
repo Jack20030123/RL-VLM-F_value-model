@@ -79,6 +79,7 @@ conv_n_channels: [16, 32, 64, 128] # default
 conv_strides: [3, 2, 2, 2] # default
 image_size: 300
 cached_label_path: null
+save_query_interval: 25
 # progress_diff mode options (only effective when use_progress_diff_reward=true)
 # smooth_window: Savitzky-Golay window length for per-episode smoothing before diff
 smooth_window: 21
