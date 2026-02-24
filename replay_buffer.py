@@ -79,7 +79,7 @@ class ReplayBuffer(object):
         
     def relabel_with_predictor(self, predictor):
         batch_size = 128
-        total_samples = self.idx
+        total_samples = self.capacity if self.full else self.idx
         total_iter = int(total_samples / batch_size)
         if total_samples > batch_size * total_iter:
             total_iter += 1
