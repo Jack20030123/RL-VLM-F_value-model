@@ -113,13 +113,19 @@ class Workspace(object):
             print(f"[ProgressDiff] Using ProgressDiffReplayBuffer with capacity={cap}, smooth_window={smooth_window}")
         else:
             # baseline mode: use original ReplayBuffer
+            use_smooth_relabel = bool(getattr(cfg, "use_smooth_relabel", False))
+            smooth_window = int(getattr(cfg, "smooth_window", 21))
             self.replay_buffer = ReplayBuffer(
                 self.env.observation_space.shape,
                 self.env.action_space.shape,
                 cap,
                 self.device,
                 store_image=self.cfg.image_reward,
-                image_size=image_height)
+                image_size=image_height,
+                smooth_relabel=use_smooth_relabel,
+                smooth_window=smooth_window)
+            if use_smooth_relabel:
+                print(f"[Baseline] SG smooth relabel enabled: smooth_window={smooth_window}")
 
         # Basic logging counters
         self.total_feedback = 0

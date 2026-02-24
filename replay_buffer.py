@@ -5,9 +5,13 @@ from scipy.signal import savgol_filter
 
 class ReplayBuffer(object):
     """Buffer to store environment transitions."""
-    def __init__(self, obs_shape, action_shape, capacity, device, window=1, store_image=False, image_size=300):
+    def __init__(self, obs_shape, action_shape, capacity, device, window=1, store_image=False, image_size=300,
+                 smooth_relabel=False, smooth_window=21):
         self.capacity = capacity
         self.device = device
+        self.smooth_relabel = smooth_relabel
+        sw = smooth_window if smooth_window % 2 == 1 else smooth_window + 1
+        self.smooth_window = max(3, sw)
 
         # the proprioceptive obs is stored as float32, pixels obs as uint8
         obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
@@ -74,32 +78,59 @@ class ReplayBuffer(object):
             self.idx = next_index
         
     def relabel_with_predictor(self, predictor):
-        if not self.store_image:
-            batch_size = 128
-        else:
-            batch_size = 128
-        total_iter = int(self.idx/batch_size)
-        
-        if self.idx > batch_size*total_iter:
+        batch_size = 128
+        total_samples = self.idx
+        total_iter = int(total_samples / batch_size)
+        if total_samples > batch_size * total_iter:
             total_iter += 1
-            
-        for index in range(total_iter):
-            last_index = (index+1)*batch_size
-            if (index+1)*batch_size > self.idx:
-                last_index = self.idx
-            
-            if not self.store_image:
-                obses = self.obses[index*batch_size:last_index]
-                actions = self.actions[index*batch_size:last_index]
-                inputs = np.concatenate([obses, actions], axis=-1)
-            else:
-                inputs = self.images[index*batch_size:last_index]
-                inputs = np.transpose(inputs, (0, 3, 1, 2))
-                inputs = inputs.astype(np.float32) / 255.0
 
-            pred_reward = predictor.r_hat_batch(inputs)
-            self.rewards[index*batch_size:last_index] = pred_reward
-            
+        if self.smooth_relabel:
+            # Collect all predictions first, then per-episode SG smooth
+            all_preds = np.empty(total_samples, dtype=np.float32)
+            for index in range(total_iter):
+                start = index * batch_size
+                end = min((index + 1) * batch_size, total_samples)
+                if not self.store_image:
+                    obses = self.obses[start:end]
+                    actions = self.actions[start:end]
+                    inputs = np.concatenate([obses, actions], axis=-1)
+                else:
+                    inputs = self.images[start:end]
+                    inputs = np.transpose(inputs, (0, 3, 1, 2))
+                    inputs = inputs.astype(np.float32) / 255.0
+                all_preds[start:end] = predictor.r_hat_batch(inputs).flatten()
+
+            # Per-episode SG smooth (no diff — rewards stay as absolute values)
+            new_rewards = np.empty(total_samples, dtype=np.float32)
+            episode_start = 0
+            for t in range(total_samples):
+                is_end = (self.not_dones[t, 0] < 0.5) or (t == total_samples - 1)
+                if is_end:
+                    ep_p = all_preds[episode_start:t + 1]
+                    ep_len = len(ep_p)
+                    if ep_len < 3:
+                        smooth_ep_p = ep_p.copy()
+                    else:
+                        sw = min(self.smooth_window, ep_len if ep_len % 2 == 1 else ep_len - 1)
+                        sw = max(3, sw)
+                        smooth_ep_p = savgol_filter(ep_p, window_length=sw, polyorder=2)
+                    new_rewards[episode_start:t + 1] = smooth_ep_p
+                    episode_start = t + 1
+            self.rewards[:total_samples] = new_rewards.reshape(-1, 1)
+        else:
+            for index in range(total_iter):
+                last_index = min((index + 1) * batch_size, total_samples)
+                if not self.store_image:
+                    obses = self.obses[index * batch_size:last_index]
+                    actions = self.actions[index * batch_size:last_index]
+                    inputs = np.concatenate([obses, actions], axis=-1)
+                else:
+                    inputs = self.images[index * batch_size:last_index]
+                    inputs = np.transpose(inputs, (0, 3, 1, 2))
+                    inputs = inputs.astype(np.float32) / 255.0
+                pred_reward = predictor.r_hat_batch(inputs)
+                self.rewards[index * batch_size:last_index] = pred_reward
+
         torch.cuda.empty_cache()
             
     def sample(self, batch_size):

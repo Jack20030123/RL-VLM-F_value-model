@@ -83,6 +83,9 @@ save_query_interval: 25
 # progress_diff mode options (only effective when use_progress_diff_reward=true)
 # smooth_window: Savitzky-Golay window length for per-episode smoothing before diff
 smooth_window: 21
+# baseline smooth relabel (only effective when use_progress_diff_reward=false)
+# use_smooth_relabel: apply per-episode SG smooth to relabeled rewards (no diff, absolute values)
+use_smooth_relabel: 0
 
 # exp_name
 exp_name: gemini_template_1
