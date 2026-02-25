@@ -101,7 +101,8 @@ class Workspace(object):
 
         # Select replay buffer based on mode
         if self.use_progress_diff_reward and self.cfg.image_reward:
-            # progress_diff mode: online reward = P(s'), relabeling uses per-episode SG smooth + diff
+            # progress_diff mode: online reward = P(s'), relabeling uses per-episode diff (+ optional SG smooth)
+            use_smooth_relabel = bool(getattr(cfg, "use_smooth_relabel", False))
             smooth_window = int(getattr(cfg, "smooth_window", 21))
             self.replay_buffer = ProgressDiffReplayBuffer(
                 self.env.observation_space.shape,
@@ -109,8 +110,9 @@ class Workspace(object):
                 cap,
                 self.device,
                 image_size=image_height,
-                smooth_window=smooth_window)
-            print(f"[ProgressDiff] Using ProgressDiffReplayBuffer with capacity={cap}, smooth_window={smooth_window}")
+                smooth_window=smooth_window,
+                smooth_relabel=use_smooth_relabel)
+            print(f"[ProgressDiff] Using ProgressDiffReplayBuffer with capacity={cap}, smooth_window={smooth_window}, smooth_relabel={use_smooth_relabel}")
         else:
             # baseline mode: use original ReplayBuffer
             use_smooth_relabel = bool(getattr(cfg, "use_smooth_relabel", False))
