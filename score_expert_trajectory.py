@@ -503,6 +503,36 @@ def main():
             pearson_pdiff_msdiff_pre, p_pdiff_msdiff_pre = pearsonr(mirror_smooth_reward_hat_diffs_pre, progress_diffs_pre)
             spearman_pdiff_msdiff_pre, _ = spearmanr(mirror_smooth_reward_hat_diffs_pre, progress_diffs_pre)
             print(f"mirror_smooth_diff vs Progress Diff:  Pearson={pearson_pdiff_msdiff_pre:.4f} (p={p_pdiff_msdiff_pre:.2e}), Spearman={spearman_pdiff_msdiff_pre:.4f}")
+
+            # Pre-success Global Smooth: smooth ONLY over the pre-success steps
+            n_pre = len(reward_hats_pre)
+            sw_global = min(21, n_pre)
+            if sw_global % 2 == 0:
+                sw_global -= 1
+            sw_global = max(3, sw_global)
+            presuccess_global_smooth_rhat = savgol_filter(reward_hats_pre, window_length=sw_global, polyorder=2)
+            presuccess_global_smooth_diff = np.diff(presuccess_global_smooth_rhat)
+            presuccess_global_smooth_diff_padded = np.concatenate([[0.0], presuccess_global_smooth_diff])
+
+            print(f"\n=== Correlation Analysis: PRE-SUCCESS GLOBAL SMOOTH (Pre-Success, steps 0-{success_step}, n={pre_success_end}, sw={sw_global}) ===")
+
+            pearson_gt_pgsmooth, p_gt_pgsmooth = pearsonr(presuccess_global_smooth_rhat, gt_rewards_pre)
+            spearman_gt_pgsmooth, _ = spearmanr(presuccess_global_smooth_rhat, gt_rewards_pre)
+            print(f"presuccess_global_smooth_rhat vs GT Reward:      Pearson={pearson_gt_pgsmooth:.4f} (p={p_gt_pgsmooth:.2e}), Spearman={spearman_gt_pgsmooth:.4f}")
+
+            pearson_prog_pgsmooth, p_prog_pgsmooth = pearsonr(presuccess_global_smooth_rhat, task_progress_pre)
+            spearman_prog_pgsmooth, _ = spearmanr(presuccess_global_smooth_rhat, task_progress_pre)
+            print(f"presuccess_global_smooth_rhat vs Task Progress:  Pearson={pearson_prog_pgsmooth:.4f} (p={p_prog_pgsmooth:.2e}), Spearman={spearman_prog_pgsmooth:.4f}")
+
+            print(f"\n=== Correlation Analysis: PRE-SUCCESS GLOBAL SMOOTH DIFF (steps 0-{success_step-1}, n={len(presuccess_global_smooth_diff)}, sw={sw_global}) ===")
+
+            pearson_gt_pgsdiff, p_gt_pgsdiff = pearsonr(presuccess_global_smooth_diff, gt_rewards_diff_pre)
+            spearman_gt_pgsdiff, _ = spearmanr(presuccess_global_smooth_diff, gt_rewards_diff_pre)
+            print(f"presuccess_global_smooth_diff vs GT Reward:      Pearson={pearson_gt_pgsdiff:.4f} (p={p_gt_pgsdiff:.2e}), Spearman={spearman_gt_pgsdiff:.4f}")
+
+            pearson_pdiff_pgsdiff, p_pdiff_pgsdiff = pearsonr(presuccess_global_smooth_diff, progress_diffs_pre)
+            spearman_pdiff_pgsdiff, _ = spearmanr(presuccess_global_smooth_diff, progress_diffs_pre)
+            print(f"presuccess_global_smooth_diff vs Progress Diff:  Pearson={pearson_pdiff_pgsdiff:.4f} (p={p_pdiff_pgsdiff:.2e}), Spearman={spearman_pdiff_pgsdiff:.4f}")
         else:
             pearson_gt_diff_pre, p_gt_diff_pre, spearman_gt_diff_pre = None, None, None
             pearson_progdiff_diff_pre, p_progdiff_diff_pre, spearman_progdiff_diff_pre = None, None, None
@@ -512,6 +542,13 @@ def main():
             pearson_gt_msmooth_pre = pearson_prog_msmooth_pre = pearson_gt_msdiff_pre = pearson_pdiff_msdiff_pre = None
             p_gt_msmooth_pre = p_prog_msmooth_pre = p_gt_msdiff_pre = p_pdiff_msdiff_pre = None
             spearman_gt_msmooth_pre = spearman_prog_msmooth_pre = spearman_gt_msdiff_pre = spearman_pdiff_msdiff_pre = None
+            presuccess_global_smooth_rhat = None
+            presuccess_global_smooth_diff = None
+            presuccess_global_smooth_diff_padded = None
+            sw_global = None
+            pearson_gt_pgsmooth = pearson_prog_pgsmooth = pearson_gt_pgsdiff = pearson_pdiff_pgsdiff = None
+            p_gt_pgsmooth = p_prog_pgsmooth = p_gt_pgsdiff = p_pdiff_pgsdiff = None
+            spearman_gt_pgsmooth = spearman_prog_pgsmooth = spearman_gt_pgsdiff = spearman_pdiff_pgsdiff = None
     else:
         pearson_gt_pre, p_gt_pre, spearman_gt_pre = None, None, None
         pearson_prog_pre, p_prog_pre, spearman_prog_pre = None, None, None
@@ -523,6 +560,13 @@ def main():
         pearson_gt_msmooth_pre = pearson_prog_msmooth_pre = pearson_gt_msdiff_pre = pearson_pdiff_msdiff_pre = None
         p_gt_msmooth_pre = p_prog_msmooth_pre = p_gt_msdiff_pre = p_pdiff_msdiff_pre = None
         spearman_gt_msmooth_pre = spearman_prog_msmooth_pre = spearman_gt_msdiff_pre = spearman_pdiff_msdiff_pre = None
+        presuccess_global_smooth_rhat = None
+        presuccess_global_smooth_diff = None
+        presuccess_global_smooth_diff_padded = None
+        sw_global = None
+        pearson_gt_pgsmooth = pearson_prog_pgsmooth = pearson_gt_pgsdiff = pearson_pdiff_pgsdiff = None
+        p_gt_pgsmooth = p_prog_pgsmooth = p_gt_pgsdiff = p_pdiff_pgsdiff = None
+        spearman_gt_pgsmooth = spearman_prog_pgsmooth = spearman_gt_pgsdiff = spearman_pdiff_pgsdiff = None
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -689,6 +733,26 @@ def main():
             f.write(f"mirror_smooth_diff vs Progress Diff:\n")
             f.write(f"  Pearson:  {pearson_pdiff_msdiff_pre:.6f} (p={p_pdiff_msdiff_pre:.2e})\n")
             f.write(f"  Spearman: {spearman_pdiff_msdiff_pre:.6f}\n")
+
+        if success_step is not None and pre_success_end > 1 and presuccess_global_smooth_rhat is not None:
+            f.write(f"\n\n{'='*60}\n")
+            f.write(f"PRE-SUCCESS GLOBAL SMOOTH reward_hat = savgol(model(s)[:presuccess], window={sw_global})\n")
+            f.write(f"(smoothing applied ONLY over pre-success steps 0-{success_step}, n={pre_success_end})\n")
+            f.write(f"PRE-SUCCESS GLOBAL SMOOTH DIFF = diff(presuccess_global_smooth_rhat)\n")
+            f.write(f"{'='*60}\n\n")
+            f.write(f"=== Pre-Success (steps 0-{success_step}, n={pre_success_end}, sw={sw_global}) ===\n")
+            f.write(f"presuccess_global_smooth_rhat vs GT Reward:\n")
+            f.write(f"  Pearson:  {pearson_gt_pgsmooth:.6f} (p={p_gt_pgsmooth:.2e})\n")
+            f.write(f"  Spearman: {spearman_gt_pgsmooth:.6f}\n\n")
+            f.write(f"presuccess_global_smooth_rhat vs Task Progress:\n")
+            f.write(f"  Pearson:  {pearson_prog_pgsmooth:.6f} (p={p_prog_pgsmooth:.2e})\n")
+            f.write(f"  Spearman: {spearman_prog_pgsmooth:.6f}\n\n")
+            f.write(f"presuccess_global_smooth_diff vs GT Reward:\n")
+            f.write(f"  Pearson:  {pearson_gt_pgsdiff:.6f} (p={p_gt_pgsdiff:.2e})\n")
+            f.write(f"  Spearman: {spearman_gt_pgsdiff:.6f}\n\n")
+            f.write(f"presuccess_global_smooth_diff vs Progress Diff:\n")
+            f.write(f"  Pearson:  {pearson_pdiff_pgsdiff:.6f} (p={p_pdiff_pgsdiff:.2e})\n")
+            f.write(f"  Spearman: {spearman_pdiff_pgsdiff:.6f}\n")
 
     print(f"Saved correlation analysis to {corr_path}")
 
@@ -987,6 +1051,18 @@ def main():
                               mirror_smooth_reward_hat_diffs_padded[:pre_success_end],
                               gt_rewards[:pre_success_end],
                               video_path_presuccess_msmooth, args.env + " (Pre-Success)",
+                              success_step, fps=2)
+
+    # Generate pre-success global smooth video (smooth computed ONLY over pre-success steps)
+    if success_step is not None and success_step > 0 and presuccess_global_smooth_rhat is not None:
+        print(f"\n=== Generating Pre-Success Global Smooth Video (sw={sw_global}, fps=2) ===")
+        video_path_presuccess_pgsmooth = os.path.join(args.output_dir, 'trajectory_analysis_presuccess_global_smooth.mp4')
+        generate_video_smooth(images[:pre_success_end],
+                              presuccess_global_smooth_rhat,
+                              presuccess_global_smooth_diff_padded,
+                              gt_rewards[:pre_success_end],
+                              video_path_presuccess_pgsmooth,
+                              args.env + f" (Pre-Success Global Smooth sw={sw_global})",
                               success_step, fps=2)
 
     return reward_hats, reward_hat_diffs, gt_rewards, task_progress, progress_diffs
