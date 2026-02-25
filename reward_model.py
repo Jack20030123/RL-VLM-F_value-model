@@ -509,68 +509,116 @@ class RewardModel:
         if len(self.inputs[-1]) < len_traj:
             max_len = max_len - 1
 
-        # get train traj
-        train_inputs = np.array(self.inputs[:max_len])
-        train_targets = np.array(self.targets[:max_len])
-        if self.vlm_label or self.image_reward:
-            train_images = np.array(self.img_inputs[:max_len])
-            # Removed Cloth squeeze(1) - not needed without list wrapping in add_data
+        # Keep only episodes long enough for at least one segment.
+        # When all episodes are the same length (fixed-horizon training), the fast
+        # path below is taken and behaviour is identical to the original code.
+        # When episodes have mixed lengths (terminate_on_success=True), the
+        # per-episode sampling path is taken so no steps are discarded.
+        valid_ep_idx = [i for i in range(max_len)
+                        if len(self.inputs[i]) > self.size_segment]
+        if not valid_ep_idx:
+            valid_ep_idx = list(range(max_len))
+        ep_lengths = [len(self.inputs[i]) for i in valid_ep_idx]
+        uniform_length = (len(set(ep_lengths)) == 1)
 
-        batch_index_2 = np.random.choice(max_len, size=mb_size, replace=True)
-        sa_t_2 = train_inputs[batch_index_2] # Batch x T x dim of s&a
-        r_t_2 = train_targets[batch_index_2] # Batch x T x 1
-        if self.vlm_label or self.image_reward:
-            img_t_2 = train_images[batch_index_2] # Batch x T x *img_dim
+        if uniform_length:
+            # ── Fast path: all episodes same length (original stack-based logic) ──
+            len_traj = ep_lengths[0]
+            max_len = len(valid_ep_idx)
+            train_inputs = np.array([self.inputs[i] for i in valid_ep_idx])
+            train_targets = np.array([self.targets[i] for i in valid_ep_idx])
+            if self.vlm_label or self.image_reward:
+                train_images = np.array([self.img_inputs[i] for i in valid_ep_idx])
 
-        batch_index_1 = np.random.choice(max_len, size=mb_size, replace=True)
-        sa_t_1 = train_inputs[batch_index_1] # Batch x T x dim of s&a
-        r_t_1 = train_targets[batch_index_1] # Batch x T x 1
-        if self.vlm_label or self.image_reward:
-            img_t_1 = train_images[batch_index_1] # Batch x T x *img_dim
+            batch_index_2 = np.random.choice(max_len, size=mb_size, replace=True)
+            sa_t_2 = train_inputs[batch_index_2] # Batch x T x dim of s&a
+            r_t_2 = train_targets[batch_index_2] # Batch x T x 1
+            if self.vlm_label or self.image_reward:
+                img_t_2 = train_images[batch_index_2]
 
-        sa_t_1 = sa_t_1.reshape(-1, sa_t_1.shape[-1]) # (Batch x T) x dim of s&a
-        r_t_1 = r_t_1.reshape(-1, r_t_1.shape[-1]) # (Batch x T) x 1
-        sa_t_2 = sa_t_2.reshape(-1, sa_t_2.shape[-1]) # (Batch x T) x dim of s&a
-        r_t_2 = r_t_2.reshape(-1, r_t_2.shape[-1]) # (Batch x T) x 1
-        if self.vlm_label or self.image_reward:
-            img_t_1 = img_t_1.reshape(-1, img_t_1.shape[2], img_t_1.shape[3], img_t_1.shape[4])
-            img_t_2 = img_t_2.reshape(-1, img_t_2.shape[2], img_t_2.shape[3], img_t_2.shape[4])
+            batch_index_1 = np.random.choice(max_len, size=mb_size, replace=True)
+            sa_t_1 = train_inputs[batch_index_1] # Batch x T x dim of s&a
+            r_t_1 = train_targets[batch_index_1] # Batch x T x 1
+            if self.vlm_label or self.image_reward:
+                img_t_1 = train_images[batch_index_1]
 
-        # Generate time index
-        time_index = np.array([list(range(i*len_traj, i*len_traj+self.size_segment)) for i in range(mb_size)])
-        if 'Cloth' not in self.env_name:
-            random_idx_2 = np.random.choice(len_traj-self.size_segment, size=mb_size, replace=True).reshape(-1,1)
-            time_index_2 = time_index + random_idx_2
-            random_idx_1 = np.random.choice(len_traj-self.size_segment, size=mb_size, replace=True).reshape(-1,1)
-            time_index_1 = time_index + random_idx_1
-        else:
-            time_index_2 = time_index
-            time_index_1 = time_index
-        if self.vlm_label or self.image_reward:
-            if self.vlm_label == 1 or self.image_reward: # use a single image for querying vlm for the labeling
-                image_time_index = np.array([[i*len_traj+self.size_segment - 1] for i in range(mb_size)])
-            else:
-                interval = self.size_segment // self.vlm_label
-                image_time_index = np.array([[i * len_traj + self.size_segment - 1 - j * interval for j in range(self.vlm_label - 1, -1, -1)] for i in range(mb_size)])
-                image_time_index = np.maximum(image_time_index, 0)
+            sa_t_1 = sa_t_1.reshape(-1, sa_t_1.shape[-1]) # (Batch x T) x dim of s&a
+            r_t_1 = r_t_1.reshape(-1, r_t_1.shape[-1]) # (Batch x T) x 1
+            sa_t_2 = sa_t_2.reshape(-1, sa_t_2.shape[-1]) # (Batch x T) x dim of s&a
+            r_t_2 = r_t_2.reshape(-1, r_t_2.shape[-1]) # (Batch x T) x 1
+            if self.vlm_label or self.image_reward:
+                img_t_1 = img_t_1.reshape(-1, img_t_1.shape[2], img_t_1.shape[3], img_t_1.shape[4])
+                img_t_2 = img_t_2.reshape(-1, img_t_2.shape[2], img_t_2.shape[3], img_t_2.shape[4])
 
+            # Generate time index
+            time_index = np.array([list(range(i*len_traj, i*len_traj+self.size_segment)) for i in range(mb_size)])
             if 'Cloth' not in self.env_name:
-                image_time_index_2 = image_time_index + random_idx_2
-                image_time_index_1 = image_time_index + random_idx_1
+                random_idx_2 = np.random.choice(len_traj-self.size_segment, size=mb_size, replace=True).reshape(-1,1)
+                time_index_2 = time_index + random_idx_2
+                random_idx_1 = np.random.choice(len_traj-self.size_segment, size=mb_size, replace=True).reshape(-1,1)
+                time_index_1 = time_index + random_idx_1
             else:
-                image_time_index_2 = image_time_index
-                image_time_index_1 = image_time_index
+                time_index_2 = time_index
+                time_index_1 = time_index
+            if self.vlm_label or self.image_reward:
+                if self.vlm_label == 1 or self.image_reward:
+                    image_time_index = np.array([[i*len_traj+self.size_segment - 1] for i in range(mb_size)])
+                else:
+                    interval = self.size_segment // self.vlm_label
+                    image_time_index = np.array([[i * len_traj + self.size_segment - 1 - j * interval for j in range(self.vlm_label - 1, -1, -1)] for i in range(mb_size)])
+                    image_time_index = np.maximum(image_time_index, 0)
+                if 'Cloth' not in self.env_name:
+                    image_time_index_2 = image_time_index + random_idx_2
+                    image_time_index_1 = image_time_index + random_idx_1
+                else:
+                    image_time_index_2 = image_time_index
+                    image_time_index_1 = image_time_index
 
-        sa_t_1 = np.take(sa_t_1, time_index_1, axis=0) # Batch x size_seg x dim of s&a
-        r_t_1 = np.take(r_t_1, time_index_1, axis=0) # Batch x size_seg x 1
-        sa_t_2 = np.take(sa_t_2, time_index_2, axis=0) # Batch x size_seg x dim of s&a
-        r_t_2 = np.take(r_t_2, time_index_2, axis=0) # Batch x size_seg x 1
+            sa_t_1 = np.take(sa_t_1, time_index_1, axis=0) # Batch x size_seg x dim of s&a
+            r_t_1 = np.take(r_t_1, time_index_1, axis=0) # Batch x size_seg x 1
+            sa_t_2 = np.take(sa_t_2, time_index_2, axis=0) # Batch x size_seg x dim of s&a
+            r_t_2 = np.take(r_t_2, time_index_2, axis=0) # Batch x size_seg x 1
+            if self.vlm_label or self.image_reward:
+                img_t_1 = np.take(img_t_1, image_time_index_1, axis=0)
+                img_t_2 = np.take(img_t_2, image_time_index_2, axis=0)
+        else:
+            # ── Variable-length path: sample (episode, step) independently ──
+            # Every step of every valid episode can be selected; no truncation.
+            n_valid = len(valid_ep_idx)
+            batch_index_1 = np.random.choice(n_valid, size=mb_size, replace=True)
+            batch_index_2 = np.random.choice(n_valid, size=mb_size, replace=True)
+
+            sa_list_1, r_list_1 = [], []
+            sa_list_2, r_list_2 = [], []
+            if self.vlm_label or self.image_reward:
+                img_list_1, img_list_2 = [], []
+
+            for j in range(mb_size):
+                ep1 = valid_ep_idx[batch_index_1[j]]
+                ep2 = valid_ep_idx[batch_index_2[j]]
+                l1 = len(self.inputs[ep1])
+                l2 = len(self.inputs[ep2])
+                o1 = np.random.randint(0, l1 - self.size_segment + 1)
+                o2 = np.random.randint(0, l2 - self.size_segment + 1)
+                sa_list_1.append(self.inputs[ep1][o1:o1 + self.size_segment])
+                r_list_1.append(self.targets[ep1][o1:o1 + self.size_segment])
+                sa_list_2.append(self.inputs[ep2][o2:o2 + self.size_segment])
+                r_list_2.append(self.targets[ep2][o2:o2 + self.size_segment])
+                if self.vlm_label or self.image_reward:
+                    img_list_1.append(self.img_inputs[ep1][o1:o1 + self.size_segment])
+                    img_list_2.append(self.img_inputs[ep2][o2:o2 + self.size_segment])
+
+            sa_t_1 = np.array(sa_list_1)  # (mb_size, size_segment, da+ds)
+            r_t_1  = np.array(r_list_1)   # (mb_size, size_segment, 1)
+            sa_t_2 = np.array(sa_list_2)
+            r_t_2  = np.array(r_list_2)
+            if self.vlm_label or self.image_reward:
+                img_t_1 = np.array(img_list_1)  # (mb_size, size_segment, H, W, C)
+                img_t_2 = np.array(img_list_2)
+
+        # Shared post-processing: flatten time dim into width for VLM (both paths)
         if self.vlm_label or self.image_reward:
-            img_t_1 = np.take(img_t_1, image_time_index_1, axis=0) # Batch x vlm_label x *img_dim
-            img_t_2 = np.take(img_t_2, image_time_index_2, axis=0) # Batch x vlm_label x *img_dim
-
             batch_size, horizon, image_height, image_width, _ = img_t_1.shape
-
             transposed_images = np.transpose(img_t_1, (0, 2, 1, 3, 4))
             img_t_1 = transposed_images.reshape(batch_size, image_height, horizon * image_width, 3) # batch x image_height x (time_horizon * image_width) x 3
             transposed_images = np.transpose(img_t_2, (0, 2, 1, 3, 4))

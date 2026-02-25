@@ -80,12 +80,17 @@ conv_strides: [3, 2, 2, 2] # default
 image_size: 300
 cached_label_path: null
 save_query_interval: 25
+# use_progress_diff_reward: relabel rewards as per-episode diff of model output P(s')
+use_progress_diff_reward: false
 # progress_diff mode options (only effective when use_progress_diff_reward=true)
 # smooth_window: Savitzky-Golay window length for per-episode smoothing before diff
 smooth_window: 21
 # baseline smooth relabel (only effective when use_progress_diff_reward=false)
 # use_smooth_relabel: apply per-episode SG smooth to relabeled rewards (no diff, absolute values)
 use_smooth_relabel: 0
+# terminate_on_success: end episode immediately when task succeeds (up to 500 steps if never success)
+# false = fixed 500-step episodes regardless of success
+terminate_on_success: false
 
 # exp_name
 exp_name: gemini_template_1

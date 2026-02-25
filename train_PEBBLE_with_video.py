@@ -109,6 +109,7 @@ class Workspace(object):
 
         # Check progress_diff mode early (needed for replay buffer selection)
         self.use_progress_diff_reward = bool(getattr(cfg, "use_progress_diff_reward", False))
+        self.terminate_on_success = bool(getattr(cfg, "terminate_on_success", False))
 
         # Replay buffer capacity (smaller if storing images to control memory)
         if self.cfg.image_reward:
@@ -398,6 +399,10 @@ class Workspace(object):
                 true_episode_reward += reward
                 if self.log_success:
                     episode_success = max(episode_success, extra['success'])
+
+                # Terminate eval episode on success if enabled (mirrors training behavior)
+                if self.terminate_on_success and self.log_success and extra.get('success', 0):
+                    break
 
                 t_idx += 1
                 if self.cfg.mode == 'eval' and t_idx > 50:
@@ -901,6 +906,11 @@ class Workspace(object):
                 done_no_max = 0 if episode_step + 1 == self.env._max_episode_steps else done
             else:
                 done_no_max = done
+
+            # Terminate episode on success if enabled
+            if self.terminate_on_success and self.log_success and extra.get('success', 0):
+                done = 1.0
+                done_no_max = 1.0  # success = natural termination, not timeout
 
             episode_reward += reward_hat
             true_episode_reward += reward
