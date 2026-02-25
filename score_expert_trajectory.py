@@ -539,6 +539,34 @@ def main():
             pearson_gt_actual_diff_pgsdiff, p_gt_actual_diff_pgsdiff = pearsonr(presuccess_global_smooth_diff, gt_rewards_actual_diff_pre)
             spearman_gt_actual_diff_pgsdiff, _ = spearmanr(presuccess_global_smooth_diff, gt_rewards_actual_diff_pre)
             print(f"presuccess_global_smooth_diff vs diff(GT Reward): Pearson={pearson_gt_actual_diff_pgsdiff:.4f} (p={p_gt_actual_diff_pgsdiff:.2e}), Spearman={spearman_gt_actual_diff_pgsdiff:.4f}")
+
+            # Pre-success Cubic Global Smooth (polyorder=3)
+            po_cubic = min(3, sw_global - 1)
+            presuccess_cubic_smooth_rhat = savgol_filter(reward_hats_pre, window_length=sw_global, polyorder=po_cubic)
+            presuccess_cubic_smooth_diff = np.diff(presuccess_cubic_smooth_rhat)
+            presuccess_cubic_smooth_diff_padded = np.concatenate([[0.0], presuccess_cubic_smooth_diff])
+
+            print(f"\n=== Correlation Analysis: PRE-SUCCESS CUBIC SMOOTH (polyorder={po_cubic}, sw={sw_global}, n={pre_success_end}) ===")
+
+            pearson_gt_pcsmooth, p_gt_pcsmooth = pearsonr(presuccess_cubic_smooth_rhat, gt_rewards_pre)
+            spearman_gt_pcsmooth, _ = spearmanr(presuccess_cubic_smooth_rhat, gt_rewards_pre)
+            print(f"presuccess_cubic_smooth_rhat vs GT Reward:      Pearson={pearson_gt_pcsmooth:.4f} (p={p_gt_pcsmooth:.2e}), Spearman={spearman_gt_pcsmooth:.4f}")
+
+            pearson_prog_pcsmooth, p_prog_pcsmooth = pearsonr(presuccess_cubic_smooth_rhat, task_progress_pre)
+            spearman_prog_pcsmooth, _ = spearmanr(presuccess_cubic_smooth_rhat, task_progress_pre)
+            print(f"presuccess_cubic_smooth_rhat vs Task Progress:  Pearson={pearson_prog_pcsmooth:.4f} (p={p_prog_pcsmooth:.2e}), Spearman={spearman_prog_pcsmooth:.4f}")
+
+            pearson_gt_pcsdiff, p_gt_pcsdiff = pearsonr(presuccess_cubic_smooth_diff, gt_rewards_diff_pre)
+            spearman_gt_pcsdiff, _ = spearmanr(presuccess_cubic_smooth_diff, gt_rewards_diff_pre)
+            print(f"presuccess_cubic_smooth_diff vs GT Reward:      Pearson={pearson_gt_pcsdiff:.4f} (p={p_gt_pcsdiff:.2e}), Spearman={spearman_gt_pcsdiff:.4f}")
+
+            pearson_pdiff_pcsdiff, p_pdiff_pcsdiff = pearsonr(presuccess_cubic_smooth_diff, progress_diffs_pre)
+            spearman_pdiff_pcsdiff, _ = spearmanr(presuccess_cubic_smooth_diff, progress_diffs_pre)
+            print(f"presuccess_cubic_smooth_diff vs Progress Diff:  Pearson={pearson_pdiff_pcsdiff:.4f} (p={p_pdiff_pcsdiff:.2e}), Spearman={spearman_pdiff_pcsdiff:.4f}")
+
+            pearson_gt_actual_diff_pcsdiff, p_gt_actual_diff_pcsdiff = pearsonr(presuccess_cubic_smooth_diff, gt_rewards_actual_diff_pre)
+            spearman_gt_actual_diff_pcsdiff, _ = spearmanr(presuccess_cubic_smooth_diff, gt_rewards_actual_diff_pre)
+            print(f"presuccess_cubic_smooth_diff vs diff(GT Reward): Pearson={pearson_gt_actual_diff_pcsdiff:.4f} (p={p_gt_actual_diff_pcsdiff:.2e}), Spearman={spearman_gt_actual_diff_pcsdiff:.4f}")
         else:
             pearson_gt_diff_pre, p_gt_diff_pre, spearman_gt_diff_pre = None, None, None
             pearson_progdiff_diff_pre, p_progdiff_diff_pre, spearman_progdiff_diff_pre = None, None, None
@@ -557,6 +585,14 @@ def main():
             spearman_gt_pgsmooth = spearman_prog_pgsmooth = spearman_gt_pgsdiff = spearman_pdiff_pgsdiff = None
             gt_rewards_actual_diff_pre = None
             pearson_gt_actual_diff_pgsdiff = p_gt_actual_diff_pgsdiff = spearman_gt_actual_diff_pgsdiff = None
+            presuccess_cubic_smooth_rhat = None
+            presuccess_cubic_smooth_diff = None
+            presuccess_cubic_smooth_diff_padded = None
+            po_cubic = None
+            pearson_gt_pcsmooth = pearson_prog_pcsmooth = pearson_gt_pcsdiff = pearson_pdiff_pcsdiff = None
+            p_gt_pcsmooth = p_prog_pcsmooth = p_gt_pcsdiff = p_pdiff_pcsdiff = None
+            spearman_gt_pcsmooth = spearman_prog_pcsmooth = spearman_gt_pcsdiff = spearman_pdiff_pcsdiff = None
+            pearson_gt_actual_diff_pcsdiff = p_gt_actual_diff_pcsdiff = spearman_gt_actual_diff_pcsdiff = None
     else:
         pearson_gt_pre, p_gt_pre, spearman_gt_pre = None, None, None
         pearson_prog_pre, p_prog_pre, spearman_prog_pre = None, None, None
@@ -577,6 +613,14 @@ def main():
         spearman_gt_pgsmooth = spearman_prog_pgsmooth = spearman_gt_pgsdiff = spearman_pdiff_pgsdiff = None
         gt_rewards_actual_diff_pre = None
         pearson_gt_actual_diff_pgsdiff = p_gt_actual_diff_pgsdiff = spearman_gt_actual_diff_pgsdiff = None
+        presuccess_cubic_smooth_rhat = None
+        presuccess_cubic_smooth_diff = None
+        presuccess_cubic_smooth_diff_padded = None
+        po_cubic = None
+        pearson_gt_pcsmooth = pearson_prog_pcsmooth = pearson_gt_pcsdiff = pearson_pdiff_pcsdiff = None
+        p_gt_pcsmooth = p_prog_pcsmooth = p_gt_pcsdiff = p_pdiff_pcsdiff = None
+        spearman_gt_pcsmooth = spearman_prog_pcsmooth = spearman_gt_pcsdiff = spearman_pdiff_pcsdiff = None
+        pearson_gt_actual_diff_pcsdiff = p_gt_actual_diff_pcsdiff = spearman_gt_actual_diff_pcsdiff = None
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -767,6 +811,29 @@ def main():
             f.write(f"  Pearson:  {pearson_gt_actual_diff_pgsdiff:.6f} (p={p_gt_actual_diff_pgsdiff:.2e})\n")
             f.write(f"  Spearman: {spearman_gt_actual_diff_pgsdiff:.6f}\n")
 
+        if success_step is not None and pre_success_end > 1 and presuccess_cubic_smooth_rhat is not None:
+            f.write(f"\n\n{'='*60}\n")
+            f.write(f"PRE-SUCCESS CUBIC SMOOTH reward_hat = savgol(model(s)[:presuccess], window={sw_global}, polyorder={po_cubic})\n")
+            f.write(f"(smoothing applied ONLY over pre-success steps 0-{success_step}, n={pre_success_end})\n")
+            f.write(f"PRE-SUCCESS CUBIC SMOOTH DIFF = diff(presuccess_cubic_smooth_rhat)\n")
+            f.write(f"{'='*60}\n\n")
+            f.write(f"=== Pre-Success (steps 0-{success_step}, n={pre_success_end}, sw={sw_global}, polyorder={po_cubic}) ===\n")
+            f.write(f"presuccess_cubic_smooth_rhat vs GT Reward:\n")
+            f.write(f"  Pearson:  {pearson_gt_pcsmooth:.6f} (p={p_gt_pcsmooth:.2e})\n")
+            f.write(f"  Spearman: {spearman_gt_pcsmooth:.6f}\n\n")
+            f.write(f"presuccess_cubic_smooth_rhat vs Task Progress:\n")
+            f.write(f"  Pearson:  {pearson_prog_pcsmooth:.6f} (p={p_prog_pcsmooth:.2e})\n")
+            f.write(f"  Spearman: {spearman_prog_pcsmooth:.6f}\n\n")
+            f.write(f"presuccess_cubic_smooth_diff vs GT Reward:\n")
+            f.write(f"  Pearson:  {pearson_gt_pcsdiff:.6f} (p={p_gt_pcsdiff:.2e})\n")
+            f.write(f"  Spearman: {spearman_gt_pcsdiff:.6f}\n\n")
+            f.write(f"presuccess_cubic_smooth_diff vs Progress Diff:\n")
+            f.write(f"  Pearson:  {pearson_pdiff_pcsdiff:.6f} (p={p_pdiff_pcsdiff:.2e})\n")
+            f.write(f"  Spearman: {spearman_pdiff_pcsdiff:.6f}\n\n")
+            f.write(f"presuccess_cubic_smooth_diff vs diff(GT Reward) [semantically correct]:\n")
+            f.write(f"  Pearson:  {pearson_gt_actual_diff_pcsdiff:.6f} (p={p_gt_actual_diff_pcsdiff:.2e})\n")
+            f.write(f"  Spearman: {spearman_gt_actual_diff_pcsdiff:.6f}\n")
+
     print(f"Saved correlation analysis to {corr_path}")
 
     # Save per-step raw data to CSV
@@ -783,13 +850,17 @@ def main():
         csv_pre_path = os.path.join(args.output_dir, 'step_data_presuccess.csv')
         with open(csv_pre_path, 'w') as f:
             f.write('step,reward_hat,gt_reward,gt_reward_diff,task_progress,progress_diff,'
-                    'presuccess_global_smooth_rhat,presuccess_global_smooth_diff_padded\n')
+                    'presuccess_global_smooth_rhat,presuccess_global_smooth_diff_padded,'
+                    'presuccess_cubic_smooth_rhat,presuccess_cubic_smooth_diff_padded\n')
             for i in range(pre_success_end):
                 gt_diff_val = gt_rewards_actual_diff_pre[i - 1] if i > 0 else 0.0
                 prog_diff_val = progress_diffs_pre[i - 1] if i > 0 else 0.0
+                cubic_rhat = presuccess_cubic_smooth_rhat[i] if presuccess_cubic_smooth_rhat is not None else float('nan')
+                cubic_diff = presuccess_cubic_smooth_diff_padded[i] if presuccess_cubic_smooth_diff_padded is not None else float('nan')
                 f.write(f'{i},{reward_hats[i]:.6f},{gt_rewards[i]:.6f},{gt_diff_val:.6f},'
                         f'{task_progress[i]:.6f},{prog_diff_val:.6f},'
-                        f'{presuccess_global_smooth_rhat[i]:.6f},{presuccess_global_smooth_diff_padded[i]:.6f}\n')
+                        f'{presuccess_global_smooth_rhat[i]:.6f},{presuccess_global_smooth_diff_padded[i]:.6f},'
+                        f'{cubic_rhat:.6f},{cubic_diff:.6f}\n')
         print(f"Saved pre-success step data to {csv_pre_path}")
 
     # Function to generate video
