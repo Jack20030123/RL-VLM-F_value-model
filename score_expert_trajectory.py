@@ -533,6 +533,12 @@ def main():
             pearson_pdiff_pgsdiff, p_pdiff_pgsdiff = pearsonr(presuccess_global_smooth_diff, progress_diffs_pre)
             spearman_pdiff_pgsdiff, _ = spearmanr(presuccess_global_smooth_diff, progress_diffs_pre)
             print(f"presuccess_global_smooth_diff vs Progress Diff:  Pearson={pearson_pdiff_pgsdiff:.4f} (p={p_pdiff_pgsdiff:.2e}), Spearman={spearman_pdiff_pgsdiff:.4f}")
+
+            # diff(GT reward): semantically correct comparison for diff-based reward
+            gt_rewards_actual_diff_pre = np.diff(gt_rewards_pre)  # true diff of GT rewards, length n_pre-1
+            pearson_gt_actual_diff_pgsdiff, p_gt_actual_diff_pgsdiff = pearsonr(presuccess_global_smooth_diff, gt_rewards_actual_diff_pre)
+            spearman_gt_actual_diff_pgsdiff, _ = spearmanr(presuccess_global_smooth_diff, gt_rewards_actual_diff_pre)
+            print(f"presuccess_global_smooth_diff vs diff(GT Reward): Pearson={pearson_gt_actual_diff_pgsdiff:.4f} (p={p_gt_actual_diff_pgsdiff:.2e}), Spearman={spearman_gt_actual_diff_pgsdiff:.4f}")
         else:
             pearson_gt_diff_pre, p_gt_diff_pre, spearman_gt_diff_pre = None, None, None
             pearson_progdiff_diff_pre, p_progdiff_diff_pre, spearman_progdiff_diff_pre = None, None, None
@@ -549,6 +555,8 @@ def main():
             pearson_gt_pgsmooth = pearson_prog_pgsmooth = pearson_gt_pgsdiff = pearson_pdiff_pgsdiff = None
             p_gt_pgsmooth = p_prog_pgsmooth = p_gt_pgsdiff = p_pdiff_pgsdiff = None
             spearman_gt_pgsmooth = spearman_prog_pgsmooth = spearman_gt_pgsdiff = spearman_pdiff_pgsdiff = None
+            gt_rewards_actual_diff_pre = None
+            pearson_gt_actual_diff_pgsdiff = p_gt_actual_diff_pgsdiff = spearman_gt_actual_diff_pgsdiff = None
     else:
         pearson_gt_pre, p_gt_pre, spearman_gt_pre = None, None, None
         pearson_prog_pre, p_prog_pre, spearman_prog_pre = None, None, None
@@ -567,6 +575,8 @@ def main():
         pearson_gt_pgsmooth = pearson_prog_pgsmooth = pearson_gt_pgsdiff = pearson_pdiff_pgsdiff = None
         p_gt_pgsmooth = p_prog_pgsmooth = p_gt_pgsdiff = p_pdiff_pgsdiff = None
         spearman_gt_pgsmooth = spearman_prog_pgsmooth = spearman_gt_pgsdiff = spearman_pdiff_pgsdiff = None
+        gt_rewards_actual_diff_pre = None
+        pearson_gt_actual_diff_pgsdiff = p_gt_actual_diff_pgsdiff = spearman_gt_actual_diff_pgsdiff = None
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -752,9 +762,35 @@ def main():
             f.write(f"  Spearman: {spearman_gt_pgsdiff:.6f}\n\n")
             f.write(f"presuccess_global_smooth_diff vs Progress Diff:\n")
             f.write(f"  Pearson:  {pearson_pdiff_pgsdiff:.6f} (p={p_pdiff_pgsdiff:.2e})\n")
-            f.write(f"  Spearman: {spearman_pdiff_pgsdiff:.6f}\n")
+            f.write(f"  Spearman: {spearman_pdiff_pgsdiff:.6f}\n\n")
+            f.write(f"presuccess_global_smooth_diff vs diff(GT Reward) [semantically correct]:\n")
+            f.write(f"  Pearson:  {pearson_gt_actual_diff_pgsdiff:.6f} (p={p_gt_actual_diff_pgsdiff:.2e})\n")
+            f.write(f"  Spearman: {spearman_gt_actual_diff_pgsdiff:.6f}\n")
 
     print(f"Saved correlation analysis to {corr_path}")
+
+    # Save per-step raw data to CSV
+    csv_path = os.path.join(args.output_dir, 'step_data.csv')
+    with open(csv_path, 'w') as f:
+        f.write('step,reward_hat,gt_reward,task_progress,smooth_rhat,smooth_diff_padded,mirror_smooth_rhat,mirror_smooth_diff_padded\n')
+        for i in range(len(reward_hats)):
+            f.write(f'{i},{reward_hats[i]:.6f},{gt_rewards[i]:.6f},{task_progress[i]:.6f},'
+                    f'{smooth_reward_hats[i]:.6f},{smooth_reward_hat_diffs_padded[i]:.6f},'
+                    f'{mirror_smooth_reward_hats[i]:.6f},{mirror_smooth_reward_hat_diffs_padded[i]:.6f}\n')
+    print(f"Saved per-step data to {csv_path}")
+
+    if success_step is not None and presuccess_global_smooth_rhat is not None:
+        csv_pre_path = os.path.join(args.output_dir, 'step_data_presuccess.csv')
+        with open(csv_pre_path, 'w') as f:
+            f.write('step,reward_hat,gt_reward,gt_reward_diff,task_progress,progress_diff,'
+                    'presuccess_global_smooth_rhat,presuccess_global_smooth_diff_padded\n')
+            for i in range(pre_success_end):
+                gt_diff_val = gt_rewards_actual_diff_pre[i - 1] if i > 0 else 0.0
+                prog_diff_val = progress_diffs_pre[i - 1] if i > 0 else 0.0
+                f.write(f'{i},{reward_hats[i]:.6f},{gt_rewards[i]:.6f},{gt_diff_val:.6f},'
+                        f'{task_progress[i]:.6f},{prog_diff_val:.6f},'
+                        f'{presuccess_global_smooth_rhat[i]:.6f},{presuccess_global_smooth_diff_padded[i]:.6f}\n')
+        print(f"Saved pre-success step data to {csv_pre_path}")
 
     # Function to generate video
     def generate_video(images_subset, reward_hats_subset, gt_rewards_subset, task_progress_subset,
