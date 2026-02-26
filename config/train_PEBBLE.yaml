@@ -47,10 +47,13 @@ save_interval: ${num_interact}
 save_video: false
 # Save combined video (env frames + reward_hat plot) - only for successfully completed episodes
 save_env_reward_video_success_only: true
-# Video recording frequency: record every N episodes (set to 0 to disable)
-video_record_frequency: 100
-# Maximum number of training videos to keep
+# Step-based video window: every video_step_interval steps, record the next
+# video_window_episodes consecutive episodes and save the successful ones.
+video_step_interval: 10000
+video_window_episodes: 5
+# Maximum number of training videos to keep on disk
 max_videos_keep: 2000
+# (legacy, no longer used) video_record_frequency: 100
 
 # setups
 seed: 1

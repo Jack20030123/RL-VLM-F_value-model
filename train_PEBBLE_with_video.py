@@ -558,6 +558,12 @@ class Workspace(object):
         vlm_acc = 0
         eval_cnt = 0
 
+        # Step-based video window state
+        video_step_interval = int(getattr(self.cfg, 'video_step_interval', 10000))
+        video_window_episodes = int(getattr(self.cfg, 'video_window_episodes', 5))
+        next_video_checkpoint = video_step_interval
+        video_window_remaining = 0
+
         # Previous frame buffer for progress-difference online reward
         curr_state_rgb = None
 
@@ -672,8 +678,16 @@ class Workspace(object):
                 # Reset previous frame at episode boundary (progress_diff only)
                 curr_state_rgb = None
 
-                # VIDEO: Start new episode recording
-                self.episode_recorder.start_episode()
+                # VIDEO: Step-based window - open a new window every video_step_interval steps
+                if self.step >= next_video_checkpoint:
+                    video_window_remaining = video_window_episodes
+                    next_video_checkpoint += video_step_interval
+                if video_window_remaining > 0:
+                    self.episode_recorder.recording = True
+                    self.video_visualizer.reset_episode()
+                    video_window_remaining -= 1
+                else:
+                    self.episode_recorder.recording = False
 
             # Sample an action
             if self.step < self.cfg.num_seed_steps:
