@@ -183,13 +183,14 @@ class ProgressDiffReplayBuffer(object):
     """
 
     def __init__(self, obs_shape, action_shape, capacity, device, window=1,
-                 image_size=300, smooth_window=21, smooth_relabel=True, reward_scale=1.0):
+                 image_size=300, smooth_window=21, smooth_relabel=True, reward_scale=1.0, discount=1.0):
         self.capacity = capacity
         self.device = device
         self.image_size = image_size
         self.smooth_window = smooth_window
         self.smooth_relabel = smooth_relabel
         self.reward_scale = reward_scale
+        self.discount = discount
 
         obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
         self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
@@ -267,10 +268,10 @@ class ProgressDiffReplayBuffer(object):
                         sw = min(sw_base, ep_len if ep_len % 2 == 1 else ep_len - 1)
                         sw = max(3, sw)
                         smooth_ep_p = savgol_filter(ep_p, window_length=sw, polyorder=2)
-                    ep_rewards = np.concatenate([[0.0], np.diff(smooth_ep_p)])
+                    ep_rewards = np.concatenate([[0.0], self.discount * smooth_ep_p[1:] - smooth_ep_p[:-1]])
                 else:
                     # Raw diff: no smooth, just diff of raw model output
-                    ep_rewards = np.concatenate([[0.0], np.diff(ep_p)])
+                    ep_rewards = np.concatenate([[0.0], self.discount * ep_p[1:] - ep_p[:-1]])
                 new_rewards[episode_start:t + 1] = ep_rewards
                 episode_start = t + 1
 

@@ -98,6 +98,8 @@ terminate_on_success: false
 max_episode_steps: 0
 # progress_diff_reward_scale: multiply relabeled diff rewards by this factor (1.0 = no scaling)
 progress_diff_reward_scale: 1.0
+# progress_diff_discount: discount factor applied to P(s') in diff (γ·P(s') - P(s)), 1.0 = no discount
+progress_diff_discount: 1.0
 
 # exp_name
 exp_name: gemini_template_1
