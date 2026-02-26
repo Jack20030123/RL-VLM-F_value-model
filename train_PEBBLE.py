@@ -61,6 +61,10 @@ class Workspace(object):
         else:
             self.env = utils.make_env(cfg)
 
+        # Override max episode steps if specified (0 = use env default)
+        if getattr(cfg, 'max_episode_steps', 0) > 0:
+            self.env._max_episode_steps = cfg.max_episode_steps
+
         # Agent I/O shapes
         cfg.agent.params.obs_dim = self.env.observation_space.shape[0]
         cfg.agent.params.action_dim = self.env.action_space.shape[0]
@@ -105,6 +109,7 @@ class Workspace(object):
             # progress_diff mode: online reward = P(s'), relabeling uses per-episode diff (+ optional SG smooth)
             use_smooth_relabel = bool(getattr(cfg, "use_smooth_relabel", False))
             smooth_window = int(getattr(cfg, "smooth_window", 21))
+            self.progress_diff_reward_scale = float(getattr(cfg, "progress_diff_reward_scale", 1.0))
             self.replay_buffer = ProgressDiffReplayBuffer(
                 self.env.observation_space.shape,
                 self.env.action_space.shape,
@@ -112,8 +117,9 @@ class Workspace(object):
                 self.device,
                 image_size=image_height,
                 smooth_window=smooth_window,
-                smooth_relabel=use_smooth_relabel)
-            print(f"[ProgressDiff] Using ProgressDiffReplayBuffer with capacity={cap}, smooth_window={smooth_window}, smooth_relabel={use_smooth_relabel}")
+                smooth_relabel=use_smooth_relabel,
+                reward_scale=self.progress_diff_reward_scale)
+            print(f"[ProgressDiff] Using ProgressDiffReplayBuffer with capacity={cap}, smooth_window={smooth_window}, smooth_relabel={use_smooth_relabel}, reward_scale={self.progress_diff_reward_scale}")
         else:
             # baseline mode: use original ReplayBuffer
             use_smooth_relabel = bool(getattr(cfg, "use_smooth_relabel", False))
@@ -286,7 +292,7 @@ class Workspace(object):
                             self.reward_model.eval()
                             p_curr = float(self.reward_model.r_hat(curr_img))
                             p_next = float(self.reward_model.r_hat(next_img))
-                            reward_hat = p_next - p_curr
+                            reward_hat = (p_next - p_curr) * self.progress_diff_reward_scale
                             self.reward_model.train()
                         curr_state_rgb = rgb_image
                     elif not self.cfg.image_reward:
@@ -724,7 +730,7 @@ class Workspace(object):
                         self.reward_model.eval()
                         p_curr = float(self.reward_model.r_hat(curr_img))
                         p_next = float(self.reward_model.r_hat(next_img))
-                        reward_hat = p_next - p_curr
+                        reward_hat = (p_next - p_curr) * self.progress_diff_reward_scale
                         self.reward_model.train()
                     curr_state_rgb = rgb_image
                 elif not self.cfg.image_reward:

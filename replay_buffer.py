@@ -183,12 +183,13 @@ class ProgressDiffReplayBuffer(object):
     """
 
     def __init__(self, obs_shape, action_shape, capacity, device, window=1,
-                 image_size=300, smooth_window=21, smooth_relabel=True):
+                 image_size=300, smooth_window=21, smooth_relabel=True, reward_scale=1.0):
         self.capacity = capacity
         self.device = device
         self.image_size = image_size
         self.smooth_window = smooth_window
         self.smooth_relabel = smooth_relabel
+        self.reward_scale = reward_scale
 
         obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
         self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
@@ -273,7 +274,7 @@ class ProgressDiffReplayBuffer(object):
                 new_rewards[episode_start:t + 1] = ep_rewards
                 episode_start = t + 1
 
-        self.rewards[:total_samples] = new_rewards.reshape(-1, 1)
+        self.rewards[:total_samples] = (new_rewards * self.reward_scale).reshape(-1, 1)
         torch.cuda.empty_cache()
         return None
 

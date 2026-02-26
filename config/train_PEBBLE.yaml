@@ -91,6 +91,10 @@ use_smooth_relabel: 0
 # terminate_on_success: end episode immediately when task succeeds (up to 500 steps if never success)
 # false = fixed 500-step episodes regardless of success
 terminate_on_success: false
+# max_episode_steps: override env default episode length (0 = use env default, typically 500)
+max_episode_steps: 0
+# progress_diff_reward_scale: multiply relabeled diff rewards by this factor (1.0 = no scaling)
+progress_diff_reward_scale: 1.0
 
 # exp_name
 exp_name: gemini_template_1
