@@ -485,16 +485,13 @@ class Workspace(object):
 
         self.logger.dump(self.step)
 
-        # Moving average of success rate over last 10 evals
-        if self.log_success:
-            self.eval_success_history.append(success_rate)
-            success_rate_ma10 = float(np.mean(self.eval_success_history))
-
         eval_metrics = {
             "eval/episode_reward": average_episode_reward,
             "eval/true_episode_reward": average_true_episode_reward,
         }
         if self.log_success:
+            self.eval_success_history.append(success_rate)
+            success_rate_ma10 = float(np.mean(self.eval_success_history))
             eval_metrics["eval/success_rate"] = success_rate
             eval_metrics["eval/success_rate_ma10"] = success_rate_ma10
         if eval_cnt is not None:
