@@ -543,7 +543,7 @@ class Workspace(object):
                     start_time = time.time()
 
                 # Periodic evaluation
-                if self.step > 0 and self.step % self.cfg.eval_frequency == 0:
+                if self.step > 0 and self.step >= (eval_cnt + 1) * self.cfg.eval_frequency:
                     self.logger.log('eval/episode', episode, self.step)
                     self.evaluate(eval_cnt=eval_cnt)
                     eval_cnt += 1
