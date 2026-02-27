@@ -982,10 +982,12 @@ class Workspace(object):
 @hydra.main(config_path='config/train_PEBBLE.yaml', strict=False)
 def main(cfg):
 
+    exp_name = getattr(cfg, "exp_name", None)
     wandb.init(
         entity="haobaizhan2-usc",
         project="rlvlmf",
-        name=getattr(cfg, "exp_name", None),
+        group=exp_name,
+        name=f"{exp_name}_s{cfg.seed}" if exp_name else None,
     )
     
     wandb.config.update({
