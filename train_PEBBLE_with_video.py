@@ -477,7 +477,8 @@ class Workspace(object):
         self.logger.log('eval/episode_reward', average_episode_reward, self.step)
         self.logger.log('eval/true_episode_reward', average_true_episode_reward, self.step)
         for key, value in extra.items():
-            self.logger.log('eval/' + key, value, self.step)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                self.logger.log('eval/' + key, value, self.step)
 
         if self.log_success:
             self.logger.log('eval/success_rate', success_rate, self.step)

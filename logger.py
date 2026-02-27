@@ -90,7 +90,8 @@ class MetersGroup(object):
         if self._csv_writer is None:
             self._csv_writer = csv.DictWriter(self._csv_file,
                                               fieldnames=sorted(data.keys()),
-                                              restval=0.0)
+                                              restval=0.0,
+                                              extrasaction='ignore')
             self._csv_writer.writeheader()
         self._csv_writer.writerow(data)
         self._csv_file.flush()
