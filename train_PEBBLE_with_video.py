@@ -165,6 +165,9 @@ class Workspace(object):
         # (episode-level success; incremented by 1 for each successful episode)
         self.total_success_episodes = 0
 
+        # Moving average buffer for eval success rate (last 10 evals)
+        self.eval_success_history = deque(maxlen=10)
+
         # Instantiate reward/progress model (same class; trained from preferences)
         reward_model_class = RewardModel
         if self.reward == 'learn_from_preference':
@@ -268,7 +271,7 @@ class Workspace(object):
         print(f"Save success only: {self.save_env_reward_video_success_only}")
         print("="*60 + "\n")
 
-    def evaluate(self, save_additional=False):
+    def evaluate(self, save_additional=False, eval_cnt=None):
         """Run evaluation episodes.
         Local GIFs: save for EVERY episode (episode 0..N-1) under eval_gifs/.
         W&B: upload ONLY episode 0 as a video artifact per evaluate() call.
@@ -482,12 +485,20 @@ class Workspace(object):
 
         self.logger.dump(self.step)
 
+        # Moving average of success rate over last 10 evals
+        if self.log_success:
+            self.eval_success_history.append(success_rate)
+            success_rate_ma10 = float(np.mean(self.eval_success_history))
+
         eval_metrics = {
             "eval/episode_reward": average_episode_reward,
             "eval/true_episode_reward": average_true_episode_reward,
         }
         if self.log_success:
             eval_metrics["eval/success_rate"] = success_rate
+            eval_metrics["eval/success_rate_ma10"] = success_rate_ma10
+        if eval_cnt is not None:
+            eval_metrics["eval_cnt"] = eval_cnt
         wandb.log(eval_metrics, step=self.step)
 
     def learn_reward(self, first_flag=0):
@@ -613,7 +624,7 @@ class Workspace(object):
                 # Periodic evaluation
                 if self.step > 0 and self.step >= (eval_cnt + 1) * self.cfg.eval_frequency:
                     self.logger.log('eval/episode', episode, self.step)
-                    self.evaluate()
+                    self.evaluate(eval_cnt=eval_cnt)
                     eval_cnt += 1
 
                 # Per-episode scalars
