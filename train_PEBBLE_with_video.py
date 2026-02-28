@@ -504,7 +504,7 @@ class Workspace(object):
         if episode is not None:
             ep_eval_metrics = {f"ep/{k}": v for k, v in eval_metrics.items()}
             ep_eval_metrics["episode"] = episode
-            wandb.log(ep_eval_metrics)
+            wandb.log(ep_eval_metrics, step=self.step)
 
     def learn_reward(self, first_flag=0):
         """Collect preference labels and train the reward/progress model."""
@@ -640,7 +640,7 @@ class Workspace(object):
                                 wandb.log({
                                     "ep/train/success_rate_per_100ep": current_success_rate,
                                     "episode": episode,
-                                })
+                                }, step=self.step)
 
                     start_time = time.time()
 
@@ -684,7 +684,7 @@ class Workspace(object):
                     if _use_episode:
                         ep_train_metrics = {f"ep/{k}": v for k, v in train_metrics.items()}
                         ep_train_metrics["episode"] = episode
-                        wandb.log(ep_train_metrics)
+                        wandb.log(ep_train_metrics, step=self.step)
 
                 if self.metaworld_random_init:
                     # Random seed each episode when metaworld_random_init is True
@@ -1080,14 +1080,19 @@ class Workspace(object):
 
             # Push transition into replay buffer (image/non-image paths)
             if self.cfg.image_reward and self.reward not in ["gt_task_reward", "sparse_task_reward"]:
-                # For progress_diff, pass s_0 as init_image at step 0
-                # so relabeling can compute P(s_0) and give correct r_0 = P(s_1) - P(s_0).
-                # _init_img_s0 was captured BEFORE curr_state_rgb was overwritten with s_1.
-                _init_img = _init_img_s0 if (self.use_progress_diff_reward and episode_step == 0) else None
-                self.replay_buffer.add(
-                    obs, action, reward_hat, next_obs, done, done_no_max,
-                    image=rgb_image[::self.resize_factor, ::self.resize_factor, :],
-                    init_image=_init_img)
+                if self.use_progress_diff_reward:
+                    # For progress_diff, pass s_0 as init_image at step 0
+                    # so relabeling can compute P(s_0) and give correct r_0 = P(s_1) - P(s_0).
+                    # _init_img_s0 was captured BEFORE curr_state_rgb was overwritten with s_1.
+                    _init_img = _init_img_s0 if episode_step == 0 else None
+                    self.replay_buffer.add(
+                        obs, action, reward_hat, next_obs, done, done_no_max,
+                        image=rgb_image[::self.resize_factor, ::self.resize_factor, :],
+                        init_image=_init_img)
+                else:
+                    self.replay_buffer.add(
+                        obs, action, reward_hat, next_obs, done, done_no_max,
+                        image=rgb_image[::self.resize_factor, ::self.resize_factor, :])
             else:
                 self.replay_buffer.add(
                     obs, action, reward_hat, next_obs, done, done_no_max)
