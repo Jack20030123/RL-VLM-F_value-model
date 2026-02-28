@@ -291,8 +291,8 @@ class Workspace(object):
             os.makedirs(save_gif_dir)
 
         all_ep_infos = []
-        for episode in range(self.cfg.num_eval_episodes):
-            print("evaluating episode {}".format(episode))
+        for ep_idx in range(self.cfg.num_eval_episodes):
+            print("evaluating episode {}".format(ep_idx))
             images = []
             if self.metaworld_random_init:
                 # Random seed each episode when metaworld_random_init is True
@@ -434,14 +434,14 @@ class Workspace(object):
             # --- NEW: Always save a local GIF for EVERY eval episode ---
             save_gif_path = os.path.join(
                 save_gif_dir,
-                'step{:07}_episode{:02}_{}.gif'.format(self.step, episode, round(true_episode_reward, 2)))
+                'step{:07}_episode{:02}_{}.gif'.format(self.step, ep_idx, round(true_episode_reward, 2)))
             try:
                 utils.save_numpy_as_gif(video_frames, save_gif_path)
             except Exception as e:
-                print(f"Failed to save eval GIF for episode {episode}: {e}")
+                print(f"Failed to save eval GIF for episode {ep_idx}: {e}")
 
             # --- W&B: Upload ONLY episode 0 per evaluate() call ---
-            if episode == 0:
+            if ep_idx == 0:
                 try:
                     video_tensor = video_frames.transpose(0, 3, 1, 2)
                     wandb.log(
@@ -449,7 +449,7 @@ class Workspace(object):
                         step=self.step
                     )
                 except Exception as e:
-                    print(f"Failed to log eval video for episode {episode}: {e}")
+                    print(f"Failed to log eval video for episode {ep_idx}: {e}")
 
             if save_additional:
                 save_image_dir = os.path.join(self.logger._log_dir, 'eval_images')
@@ -457,13 +457,13 @@ class Workspace(object):
                     os.makedirs(save_image_dir)
                 for i, image in enumerate(images):
                     save_image_path = os.path.join(
-                        save_image_dir, 'step{:07}_episode{:02}_{}.png'.format(self.step, episode, i))
+                        save_image_dir, 'step{:07}_episode{:02}_{}.png'.format(self.step, ep_idx, i))
                     image = Image.fromarray(image)
                     image.save(save_image_path)
                 save_reward_path = os.path.join(self.logger._log_dir, "eval_reward")
                 if not os.path.exists(save_reward_path):
                     os.makedirs(save_reward_path)
-                with open(os.path.join(save_reward_path, "step{:07}_episode{:02}.pkl".format(self.step, episode)), "wb") as f:
+                with open(os.path.join(save_reward_path, "step{:07}_episode{:02}.pkl".format(self.step, ep_idx)), "wb") as f:
                     pkl.dump(rewards, f)
 
             average_episode_reward += episode_reward

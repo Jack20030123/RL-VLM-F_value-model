@@ -58,6 +58,7 @@ class Workspace(object):
             self.env = utils.make_classic_control_env(cfg)
         elif 'softgym' in cfg.env:
             self.env = utils.make_softgym_env(cfg)
+            self.log_success = True
         else:
             self.env = utils.make_env(cfg)
 
@@ -228,8 +229,8 @@ class Workspace(object):
             os.makedirs(save_gif_dir)
 
         all_ep_infos = []
-        for episode in range(self.cfg.num_eval_episodes):
-            print("evaluating episode {}".format(episode))
+        for ep_idx in range(self.cfg.num_eval_episodes):
+            print("evaluating episode {}".format(ep_idx))
             images = []
             if self.metaworld_random_init:
                 # Random seed each episode when metaworld_random_init is True
@@ -371,14 +372,14 @@ class Workspace(object):
             # --- NEW: Always save a local GIF for EVERY eval episode ---
             save_gif_path = os.path.join(
                 save_gif_dir,
-                'step{:07}_episode{:02}_{}.gif'.format(self.step, episode, round(true_episode_reward, 2)))
+                'step{:07}_episode{:02}_{}.gif'.format(self.step, ep_idx, round(true_episode_reward, 2)))
             try:
                 utils.save_numpy_as_gif(video_frames, save_gif_path)
             except Exception as e:
-                print(f"Failed to save eval GIF for episode {episode}: {e}")
+                print(f"Failed to save eval GIF for episode {ep_idx}: {e}")
 
             # --- W&B: Upload ONLY episode 0 per evaluate() call ---
-            if episode == 0:
+            if ep_idx == 0:
                 try:
                     video_tensor = video_frames.transpose(0, 3, 1, 2)
                     wandb.log(
@@ -386,7 +387,7 @@ class Workspace(object):
                         step=self.step
                     )
                 except Exception as e:
-                    print(f"Failed to log eval video for episode {episode}: {e}")
+                    print(f"Failed to log eval video for episode {ep_idx}: {e}")
 
             if save_additional:
                 save_image_dir = os.path.join(self.logger._log_dir, 'eval_images')
@@ -394,13 +395,13 @@ class Workspace(object):
                     os.makedirs(save_image_dir)
                 for i, image in enumerate(images):
                     save_image_path = os.path.join(
-                        save_image_dir, 'step{:07}_episode{:02}_{}.png'.format(self.step, episode, i))
+                        save_image_dir, 'step{:07}_episode{:02}_{}.png'.format(self.step, ep_idx, i))
                     image = Image.fromarray(image)
                     image.save(save_image_path)
                 save_reward_path = os.path.join(self.logger._log_dir, "eval_reward")
                 if not os.path.exists(save_reward_path):
                     os.makedirs(save_reward_path)
-                with open(os.path.join(save_reward_path, "step{:07}_episode{:02}.pkl".format(self.step, episode)), "wb") as f:
+                with open(os.path.join(save_reward_path, "step{:07}_episode{:02}.pkl".format(self.step, ep_idx)), "wb") as f:
                     pkl.dump(rewards, f)
 
             average_episode_reward += episode_reward
@@ -642,6 +643,22 @@ class Workspace(object):
                 prev_members = None
                 # Reset previous frame at episode boundary (progress_diff only)
                 curr_state_rgb = None
+                # For progress_diff: render s_0 so step-0 reward = P(s_1) - P(s_0), not 0
+                if self.use_progress_diff_reward and self.cfg.image_reward:
+                    if "metaworld" in self.cfg.env:
+                        _s0 = self.env.render()
+                        _s0 = _s0[::-1, :, :]
+                        if "drawer" in self.cfg.env or "sweep" in self.cfg.env:
+                            _s0 = _s0[100:400, 100:400, :]
+                    elif self.cfg.env in ["CartPole-v1", "Acrobot-v1", "MountainCar-v0", "Pendulum-v0"]:
+                        _s0 = self.env.render(mode='rgb_array')
+                    elif 'softgym' in self.cfg.env:
+                        _s0 = self.env.render(mode='rgb_array', hide_picker=True)
+                    else:
+                        _s0 = self.env.render(mode='rgb_array')
+                    if 'Water' not in self.cfg.env and 'Rope' not in self.cfg.env:
+                        _s0 = cv2.resize(_s0, (self.image_height, self.image_width))
+                    curr_state_rgb = _s0
 
                 # ── Episode-mode triggers (VLM / relabel / save) ───────────────
                 if _use_episode and self.step > 0:
