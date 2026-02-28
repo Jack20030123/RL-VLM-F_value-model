@@ -96,6 +96,27 @@ use_smooth_relabel: 0
 terminate_on_success: false
 # max_episode_steps: override env default episode length (0 = use env default, typically 500)
 max_episode_steps: 0
+
+# ── Episode-based training (use_episode=true activates all ep-based params below) ──
+# When false (default): all original step-based logic is completely unchanged.
+use_episode: false
+# Total training episodes (replaces num_train_steps when use_episode=true)
+num_train_episodes: 2000
+# Eval frequency in episodes (replaces eval_frequency when use_episode=true)
+eval_episode_frequency: 20
+# VLM query + relabel frequency in episodes (replaces num_interact when use_episode=true)
+num_interact_episodes: 8
+# Model save frequency in episodes (replaces save_interval when use_episode=true)
+save_episode_interval: 50
+# Video window frequency in episodes (replaces video_step_interval when use_episode=true)
+video_episode_interval: 50
+# Seed phase length in episodes (replaces num_seed_steps when use_episode=true)
+num_seed_episodes: 2
+# Unsupervised phase length in episodes (replaces num_unsup_steps when use_episode=true)
+num_unsup_episodes: 10
+# Buffer capacity in episodes; auto-computes step cap = N * max_episode_steps.
+# Only used when use_episode=true. Uses image_replay_capacity if 0.
+image_replay_capacity_episodes: 400
 # progress_diff_reward_scale: multiply relabeled diff rewards by this factor (1.0 = no scaling)
 progress_diff_reward_scale: 1.0
 # progress_diff_discount: discount factor applied to P(s') in diff (γ·P(s') - P(s)), 1.0 = no discount

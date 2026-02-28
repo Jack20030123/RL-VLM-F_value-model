@@ -98,9 +98,15 @@ class Workspace(object):
         self.terminate_on_success = bool(getattr(cfg, "terminate_on_success", False))
 
         # Replay buffer capacity (smaller if storing images to control memory)
+        _use_episode = bool(getattr(cfg, 'use_episode', False))
         if self.cfg.image_reward:
-            img_capacity = getattr(cfg, "image_replay_capacity", None)
-            cap = int(img_capacity) if img_capacity is not None else 200000
+            ep_cap_episodes = int(getattr(cfg, 'image_replay_capacity_episodes', 0))
+            if _use_episode and ep_cap_episodes > 0:
+                _max_ep_steps = int(getattr(cfg, 'max_episode_steps', 0)) or 500
+                cap = ep_cap_episodes * _max_ep_steps
+            else:
+                img_capacity = getattr(cfg, "image_replay_capacity", None)
+                cap = int(img_capacity) if img_capacity is not None else 200000
         else:
             cap = int(cfg.replay_buffer_capacity)
 
@@ -208,7 +214,7 @@ class Workspace(object):
 
         self.progress_target = None
 
-    def evaluate(self, save_additional=False, eval_cnt=None):
+    def evaluate(self, save_additional=False, eval_cnt=None, episode=None):
         """Run evaluation episodes.
         Local GIFs: save for EVERY episode (episode 0..N-1) under eval_gifs/.
         W&B: upload ONLY episode 0 as a video artifact per evaluate() call.
@@ -376,10 +382,7 @@ class Workspace(object):
                 try:
                     video_tensor = video_frames.transpose(0, 3, 1, 2)
                     wandb.log(
-                        {
-                            f"eval/video_step{self.step:07d}_ep{episode:02d}":
-                                wandb.Video(video_tensor, fps=12, format="gif")
-                        },
+                        {"eval/video": wandb.Video(video_tensor, fps=12, format="gif")},
                         step=self.step
                     )
                 except Exception as e:
@@ -435,6 +438,10 @@ class Workspace(object):
         if eval_cnt is not None:
             eval_metrics["eval_cnt"] = eval_cnt
         wandb.log(eval_metrics, step=self.step)
+        if episode is not None:
+            ep_eval_metrics = {f"ep/{k}": v for k, v in eval_metrics.items()}
+            ep_eval_metrics["episode"] = episode
+            wandb.log(ep_eval_metrics)
 
     def learn_reward(self, first_flag=0):
         """Collect preference labels and train the reward/progress model."""
@@ -509,7 +516,19 @@ class Workspace(object):
         # Previous frame buffer for progress-difference online reward
         curr_state_rgb = None
 
-        while self.step < self.cfg.num_train_steps:
+        # ── Episode-based training config ──────────────────────────────────────
+        _use_episode = bool(getattr(self.cfg, 'use_episode', False))
+        if _use_episode:
+            _num_train_ep   = int(self.cfg.num_train_episodes)
+            _eval_ep_freq   = int(getattr(self.cfg, 'eval_episode_frequency', 20))
+            _interact_ep    = int(getattr(self.cfg, 'num_interact_episodes', 8))
+            _save_ep_int    = int(getattr(self.cfg, 'save_episode_interval', 50))
+            _num_seed_ep    = int(getattr(self.cfg, 'num_seed_episodes', 2))
+            _num_unsup_ep   = int(getattr(self.cfg, 'num_unsup_episodes', 10))
+            _supervised_started = False   # one-time flag for first preference learning
+        # ───────────────────────────────────────────────────────────────────────
+
+        while (episode < _num_train_ep) if _use_episode else (self.step < self.cfg.num_train_steps):
             if done:
                 # Episode boundary logging (for the episode that just finished)
                 if self.step > 0:
@@ -537,11 +556,21 @@ class Workspace(object):
                             wandb.log({
                                 "train/success_rate_per_100ep": current_success_rate,
                             }, step=self.step)
+                            if _use_episode:
+                                wandb.log({
+                                    "ep/train/success_rate_per_100ep": current_success_rate,
+                                    "episode": episode,
+                                })
 
                     start_time = time.time()
 
                 # Periodic evaluation
-                if self.step > 0 and self.step >= (eval_cnt + 1) * self.cfg.eval_frequency:
+                if _use_episode:
+                    if episode > 0 and episode % _eval_ep_freq == 0:
+                        self.logger.log('eval/episode', episode, self.step)
+                        self.evaluate(eval_cnt=eval_cnt, episode=episode)
+                        eval_cnt += 1
+                elif self.step > 0 and self.step >= (eval_cnt + 1) * self.cfg.eval_frequency:
                     self.logger.log('eval/episode', episode, self.step)
                     self.evaluate(eval_cnt=eval_cnt)
                     eval_cnt += 1
@@ -572,6 +601,10 @@ class Workspace(object):
                         # NEW: also send the cumulative success count (shows as a curve in W&B)
                         train_metrics["train/total_success_episodes"] = self.total_success_episodes
                     wandb.log(train_metrics, step=self.step)
+                    if _use_episode:
+                        ep_train_metrics = {f"ep/{k}": v for k, v in train_metrics.items()}
+                        ep_train_metrics["episode"] = episode
+                        wandb.log(ep_train_metrics)
 
                 if self.metaworld_random_init:
                     # Random seed each episode when metaworld_random_init is True
@@ -610,57 +643,84 @@ class Workspace(object):
                 # Reset previous frame at episode boundary (progress_diff only)
                 curr_state_rgb = None
 
+                # ── Episode-mode triggers (VLM / relabel / save) ───────────────
+                if _use_episode and self.step > 0:
+                    _trans_ep = _num_seed_ep + _num_unsup_ep
+                    # ① First transition into supervised phase (fires exactly once)
+                    if episode == _trans_ep + 1 and not _supervised_started:
+                        _supervised_started = True
+                        print("finished unsupervised exploration!!")
+                        if self.reward in ('learn_from_preference', 'learn_from_score'):
+                            self.reward_model.change_batch(1)
+                            new_margin = np.mean(avg_train_true_return) * (self.cfg.segment / self.env._max_episode_steps)
+                            self.reward_model.set_teacher_thres_skip(new_margin)
+                            self.reward_model.set_teacher_thres_equal(new_margin)
+                            reward_learning_acc, vlm_acc = self.learn_reward(first_flag=1)
+                            self.reward_model.eval()
+                            self.replay_buffer.relabel_with_predictor(self.reward_model)
+                            self.reward_model.train()
+                        self.agent.reset_critic()
+                        self.agent.update_after_reset(
+                            self.replay_buffer, self.logger, self.step,
+                            gradient_update=self.cfg.reset_update,
+                            policy_update=True)
+                        interact_count = 0
+                    # ② Periodic preference learning + relabeling (every _interact_ep episodes)
+                    elif episode > _trans_ep + 1:
+                        interact_count += 1
+                        if self.total_feedback < self.cfg.max_feedback and (
+                                self.reward in ('learn_from_preference', 'learn_from_score')):
+                            if interact_count >= _interact_ep:
+                                self.reward_model.change_batch(1)
+                                new_margin = np.mean(avg_train_true_return) * (self.cfg.segment / self.env._max_episode_steps)
+                                self.reward_model.set_teacher_thres_skip(new_margin * self.cfg.teacher_eps_skip)
+                                self.reward_model.set_teacher_thres_equal(new_margin * self.cfg.teacher_eps_equal)
+                                if self.reward_model.mb_size + self.total_feedback > self.cfg.max_feedback:
+                                    self.reward_model.set_batch(self.cfg.max_feedback - self.total_feedback)
+                                reward_learning_acc, vlm_acc = self.learn_reward()
+                                self.reward_model.eval()
+                                self.replay_buffer.relabel_with_predictor(self.reward_model)
+                                self.reward_model.train()
+                                interact_count = 0
+                    # ③ Model checkpoint
+                    if episode > 0 and episode % _save_ep_int == 0:
+                        self.agent.save(model_save_dir, self.step)
+                        self.reward_model.save(model_save_dir, self.step)
+                # ───────────────────────────────────────────────────────────────
+
             # Sample an action
-            if self.step < self.cfg.num_seed_steps:
+            if _use_episode:
+                if episode <= _num_seed_ep:
+                    action = self.env.action_space.sample()
+                else:
+                    with utils.eval_mode(self.agent):
+                        action = self.agent.act(obs, sample=True)
+            elif self.step < self.cfg.num_seed_steps:
                 action = self.env.action_space.sample()
             else:
                 with utils.eval_mode(self.agent):
                     action = self.agent.act(obs, sample=True)
 
-            # Switch from unsupervised to supervised preference learning
-            if self.step == (self.cfg.num_seed_steps + self.cfg.num_unsup_steps):
-                print("finished unsupervised exploration!!")
+            # Phase-dependent per-step updates
+            if _use_episode:
+                # Episode mode: VLM/relabel triggers are handled in the if-done block above.
+                # Here we only do the per-step agent update based on current phase.
+                _trans_ep = _num_seed_ep + _num_unsup_ep
+                if episode > _trans_ep:
+                    self.agent.update(self.replay_buffer, self.logger, self.step, 1)
+                elif episode > _num_seed_ep:
+                    if self.step % 1000 == 0:
+                        print("unsupervised exploration!!")
+                    self.agent.update_state_ent(self.replay_buffer, self.logger, self.step,
+                                                gradient_update=1, K=self.cfg.topK)
+                # seed phase: no update
+            else:
+                # ── Original step-based logic (unchanged) ────────────────────────
+                # Switch from unsupervised to supervised preference learning
+                if self.step == (self.cfg.num_seed_steps + self.cfg.num_unsup_steps):
+                    print("finished unsupervised exploration!!")
 
-                if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
-                    if self.cfg.reward_schedule == 1:
-                        frac = (self.cfg.num_train_steps - self.step) / self.cfg.num_train_steps
-                        if frac == 0:
-                            frac = 0.01
-                    elif self.cfg.reward_schedule == 2:
-                        frac = self.cfg.num_train_steps / (self.cfg.num_train_steps - self.step + 1)
-                    else:
-                        frac = 1
-                    self.reward_model.change_batch(frac)
-
-                    # Optional teacher thresholds
-                    new_margin = np.mean(avg_train_true_return) * (self.cfg.segment / self.env._max_episode_steps)
-                    self.reward_model.set_teacher_thres_skip(new_margin)
-                    self.reward_model.set_teacher_thres_equal(new_margin)
-
-                    # First preference learning
-                    reward_learning_acc, vlm_acc = self.learn_reward(first_flag=1)
-
-                    # Relabel replay with the updated model
-                    self.reward_model.eval()
-                    self.replay_buffer.relabel_with_predictor(self.reward_model)
-                    self.reward_model.train()
-
-                # Reset critic after unsupervised exploration
-                self.agent.reset_critic()
-
-                # Warmup updates
-                self.agent.update_after_reset(
-                    self.replay_buffer, self.logger, self.step,
-                    gradient_update=self.cfg.reset_update,
-                    policy_update=True)
-
-                interact_count = 0
-
-            elif self.step > self.cfg.num_seed_steps + self.cfg.num_unsup_steps:
-                # Periodic preference learning and relabeling
-                if self.total_feedback < self.cfg.max_feedback and (
-                        self.reward == 'learn_from_preference' or self.reward == 'learn_from_score'):
-                    if interact_count == self.cfg.num_interact:
+                    if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                         if self.cfg.reward_schedule == 1:
                             frac = (self.cfg.num_train_steps - self.step) / self.cfg.num_train_steps
                             if frac == 0:
@@ -671,28 +731,68 @@ class Workspace(object):
                             frac = 1
                         self.reward_model.change_batch(frac)
 
+                        # Optional teacher thresholds
                         new_margin = np.mean(avg_train_true_return) * (self.cfg.segment / self.env._max_episode_steps)
-                        self.reward_model.set_teacher_thres_skip(new_margin * self.cfg.teacher_eps_skip)
-                        self.reward_model.set_teacher_thres_equal(new_margin * self.cfg.teacher_eps_equal)
+                        self.reward_model.set_teacher_thres_skip(new_margin)
+                        self.reward_model.set_teacher_thres_equal(new_margin)
 
-                        # Avoid exceeding max_feedback
-                        if self.reward_model.mb_size + self.total_feedback > self.cfg.max_feedback:
-                            self.reward_model.set_batch(self.cfg.max_feedback - self.total_feedback)
+                        # First preference learning
+                        reward_learning_acc, vlm_acc = self.learn_reward(first_flag=1)
 
-                        reward_learning_acc, vlm_acc = self.learn_reward()
+                        # Relabel replay with the updated model
                         self.reward_model.eval()
                         self.replay_buffer.relabel_with_predictor(self.reward_model)
                         self.reward_model.train()
-                        interact_count = 0
 
-                self.agent.update(self.replay_buffer, self.logger, self.step, 1)
+                    # Reset critic after unsupervised exploration
+                    self.agent.reset_critic()
 
-            # Unsupervised exploration updates (state entropy) before preference learning kicks in
-            elif self.step > self.cfg.num_seed_steps:
-                if self.step % 1000 == 0:
-                    print("unsupervised exploration!!")
-                self.agent.update_state_ent(self.replay_buffer, self.logger, self.step,
-                                            gradient_update=1, K=self.cfg.topK)
+                    # Warmup updates
+                    self.agent.update_after_reset(
+                        self.replay_buffer, self.logger, self.step,
+                        gradient_update=self.cfg.reset_update,
+                        policy_update=True)
+
+                    interact_count = 0
+
+                elif self.step > self.cfg.num_seed_steps + self.cfg.num_unsup_steps:
+                    # Periodic preference learning and relabeling
+                    if self.total_feedback < self.cfg.max_feedback and (
+                            self.reward == 'learn_from_preference' or self.reward == 'learn_from_score'):
+                        if interact_count == self.cfg.num_interact:
+                            if self.cfg.reward_schedule == 1:
+                                frac = (self.cfg.num_train_steps - self.step) / self.cfg.num_train_steps
+                                if frac == 0:
+                                    frac = 0.01
+                            elif self.cfg.reward_schedule == 2:
+                                frac = self.cfg.num_train_steps / (self.cfg.num_train_steps - self.step + 1)
+                            else:
+                                frac = 1
+                            self.reward_model.change_batch(frac)
+
+                            new_margin = np.mean(avg_train_true_return) * (self.cfg.segment / self.env._max_episode_steps)
+                            self.reward_model.set_teacher_thres_skip(new_margin * self.cfg.teacher_eps_skip)
+                            self.reward_model.set_teacher_thres_equal(new_margin * self.cfg.teacher_eps_equal)
+
+                            # Avoid exceeding max_feedback
+                            if self.reward_model.mb_size + self.total_feedback > self.cfg.max_feedback:
+                                self.reward_model.set_batch(self.cfg.max_feedback - self.total_feedback)
+
+                            reward_learning_acc, vlm_acc = self.learn_reward()
+                            self.reward_model.eval()
+                            self.replay_buffer.relabel_with_predictor(self.reward_model)
+                            self.reward_model.train()
+                            interact_count = 0
+
+                    self.agent.update(self.replay_buffer, self.logger, self.step, 1)
+
+                # Unsupervised exploration updates (state entropy) before preference learning kicks in
+                elif self.step > self.cfg.num_seed_steps:
+                    if self.step % 1000 == 0:
+                        print("unsupervised exploration!!")
+                    self.agent.update_state_ent(self.replay_buffer, self.logger, self.step,
+                                                gradient_update=1, K=self.cfg.topK)
+                # ─────────────────────────────────────────────────────────────────
 
             # Environment step
             try:  # Handle different gym APIs
@@ -726,6 +826,7 @@ class Workspace(object):
             # ===================== reward computation (train) =====================
             p_curr = float('nan')
             p_next = float('nan')
+            _init_img_s0 = None  # will hold s_0 for buffer init_image (progress_diff only)
             if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                 if self.use_progress_diff_reward and self.cfg.image_reward:
                     # Online raw diff: P(s'_{t+1}) - P(s'_t), no EMA/normalization
@@ -743,6 +844,9 @@ class Workspace(object):
                         p_next = float(self.reward_model.r_hat(next_img))
                         reward_hat = (self.progress_diff_discount * p_next - p_curr) * self.progress_diff_reward_scale
                         self.reward_model.train()
+                    # Capture s_0 BEFORE overwriting curr_state_rgb with s_1
+                    if episode_step == 0 and curr_state_rgb is not None:
+                        _init_img_s0 = curr_state_rgb[::self.resize_factor, ::self.resize_factor, :]
                     curr_state_rgb = rgb_image
                 elif not self.cfg.image_reward:
                     self.reward_model.eval()
@@ -861,9 +965,11 @@ class Workspace(object):
 
             # Push transition into replay buffer (image/non-image paths)
             if self.cfg.image_reward and self.reward not in ["gt_task_reward", "sparse_task_reward"]:
+                _init_img = _init_img_s0 if (self.use_progress_diff_reward and episode_step == 0) else None
                 self.replay_buffer.add(
                     obs, action, reward_hat, next_obs, done, done_no_max,
-                    image=rgb_image[::self.resize_factor, ::self.resize_factor, :])
+                    image=rgb_image[::self.resize_factor, ::self.resize_factor, :],
+                    init_image=_init_img)
             else:
                 self.replay_buffer.add(
                     obs, action, reward_hat, next_obs, done, done_no_max)
@@ -871,12 +977,18 @@ class Workspace(object):
             obs = next_obs
             episode_step += 1
             self.step += 1
-            interact_count += 1
+            if not _use_episode:
+                interact_count += 1
 
-            # Periodic checkpointing
-            if self.step % self.cfg.save_interval == 0 and self.step > 0:
+            # Periodic checkpointing (step mode only; episode mode saves in the if-done block)
+            if not _use_episode and self.step % self.cfg.save_interval == 0 and self.step > 0:
                 self.agent.save(model_save_dir, self.step)
                 self.reward_model.save(model_save_dir, self.step)
+
+        # ── Episode-mode: run final eval for the last episode ──────────────────
+        if _use_episode and _num_train_ep % _eval_ep_freq == 0:
+            self.evaluate(eval_cnt=eval_cnt, episode=_num_train_ep)
+        # ───────────────────────────────────────────────────────────────────────
 
         # Final checkpoint
         self.agent.save(model_save_dir, self.step)
@@ -901,6 +1013,10 @@ def main(cfg):
         "seed": cfg.seed,
         "num_train_steps": cfg.num_train_steps,
     })
+
+    if getattr(cfg, 'use_episode', False):
+        wandb.define_metric("episode")
+        wandb.define_metric("ep/*", step_metric="episode")
 
     workspace = Workspace(cfg)
 

@@ -80,22 +80,31 @@ class ReplayBuffer(object):
     def relabel_with_predictor(self, predictor):
         batch_size = 128
         total_samples = self.capacity if self.full else self.idx
-        total_iter = int(total_samples / batch_size)
-        if total_samples > batch_size * total_iter:
-            total_iter += 1
+        total_iter = int(np.ceil(total_samples / batch_size))
+
+        # Iterate in chronological order to avoid splice bug at circular buffer wrap point.
+        # When full: oldest data starts at self.idx; physical order 0..N-1 cuts across that boundary.
+        if self.full:
+            chron_idxs = np.concatenate([
+                np.arange(self.idx, self.capacity),
+                np.arange(0, self.idx),
+            ])
+        else:
+            chron_idxs = np.arange(0, self.idx)
 
         if self.smooth_relabel:
-            # Collect all predictions first, then per-episode SG smooth
+            # Collect all predictions in chronological order, then per-episode SG smooth
             all_preds = np.empty(total_samples, dtype=np.float32)
             for index in range(total_iter):
                 start = index * batch_size
                 end = min((index + 1) * batch_size, total_samples)
+                batch_phys = chron_idxs[start:end]
                 if not self.store_image:
-                    obses = self.obses[start:end]
-                    actions = self.actions[start:end]
+                    obses = self.obses[batch_phys]
+                    actions = self.actions[batch_phys]
                     inputs = np.concatenate([obses, actions], axis=-1)
                 else:
-                    inputs = self.images[start:end]
+                    inputs = self.images[batch_phys]
                     inputs = np.transpose(inputs, (0, 3, 1, 2))
                     inputs = inputs.astype(np.float32) / 255.0
                 all_preds[start:end] = predictor.r_hat_batch(inputs).flatten()
@@ -104,7 +113,8 @@ class ReplayBuffer(object):
             new_rewards = np.empty(total_samples, dtype=np.float32)
             episode_start = 0
             for t in range(total_samples):
-                is_end = (self.not_dones[t, 0] < 0.5) or (t == total_samples - 1)
+                phys_t = chron_idxs[t]
+                is_end = (self.not_dones[phys_t, 0] < 0.5) or (t == total_samples - 1)
                 if is_end:
                     ep_p = all_preds[episode_start:t + 1]
                     ep_len = len(ep_p)
@@ -116,20 +126,23 @@ class ReplayBuffer(object):
                         smooth_ep_p = savgol_filter(ep_p, window_length=sw, polyorder=2)
                     new_rewards[episode_start:t + 1] = smooth_ep_p
                     episode_start = t + 1
-            self.rewards[:total_samples] = new_rewards.reshape(-1, 1)
+            # Write back to physical positions
+            self.rewards[chron_idxs] = new_rewards.reshape(-1, 1)
         else:
             for index in range(total_iter):
-                last_index = min((index + 1) * batch_size, total_samples)
+                start = index * batch_size
+                end = min((index + 1) * batch_size, total_samples)
+                batch_phys = chron_idxs[start:end]
                 if not self.store_image:
-                    obses = self.obses[index * batch_size:last_index]
-                    actions = self.actions[index * batch_size:last_index]
+                    obses = self.obses[batch_phys]
+                    actions = self.actions[batch_phys]
                     inputs = np.concatenate([obses, actions], axis=-1)
                 else:
-                    inputs = self.images[index * batch_size:last_index]
+                    inputs = self.images[batch_phys]
                     inputs = np.transpose(inputs, (0, 3, 1, 2))
                     inputs = inputs.astype(np.float32) / 255.0
                 pred_reward = predictor.r_hat_batch(inputs)
-                self.rewards[index * batch_size:last_index] = pred_reward
+                self.rewards[batch_phys] = pred_reward
 
         torch.cuda.empty_cache()
             
@@ -201,8 +214,12 @@ class ProgressDiffReplayBuffer(object):
         self.not_dones_no_max = np.empty((capacity, 1), dtype=np.float32)
         self.window = window
 
-        # Only next_image needed; named `images` to match ReplayBuffer interface
+        # Stores next-state images s_{t+1}; named `images` to match ReplayBuffer interface
         self.images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
+
+        # episode_init_images[buf_idx] = s_0 image for the episode starting at buf_idx
+        # Only populated for first steps of each episode (sparse, low memory)
+        self._episode_init_images = {}
 
         self.idx = 0
         self.last_save = 0
@@ -211,7 +228,11 @@ class ProgressDiffReplayBuffer(object):
     def __len__(self):
         return self.capacity if self.full else self.idx
 
-    def add(self, obs, action, reward, next_obs, done, done_no_max, image=None):
+    def add(self, obs, action, reward, next_obs, done, done_no_max, image=None, init_image=None):
+        # Clean up stale episode_init_image if this slot is being overwritten
+        if self.idx in self._episode_init_images:
+            del self._episode_init_images[self.idx]
+
         np.copyto(self.obses[self.idx], obs)
         np.copyto(self.actions[self.idx], action)
         np.copyto(self.rewards[self.idx], reward)
@@ -222,6 +243,10 @@ class ProgressDiffReplayBuffer(object):
         if image is not None:
             np.copyto(self.images[self.idx], image)
 
+        # Store s_0 for this episode (only passed at episode_step == 0)
+        if init_image is not None:
+            self._episode_init_images[self.idx] = init_image.copy()
+
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
 
@@ -230,52 +255,82 @@ class ProgressDiffReplayBuffer(object):
         Relabel rewards using per-episode SG smooth + diff.
 
         Steps:
-        1. Batch-compute P(s') for all stored images.
-        2. Walk buffer in chronological order; detect episode ends via not_dones.
-        3. Per episode: Savitzky-Golay smooth the P values, then np.diff.
-           First step of each episode gets reward=0 (no prev state).
+        1. Batch-compute P(s_{t+1}) for all stored next-state images.
+        2. Batch-compute P(s_0) for each episode start from _episode_init_images.
+        3. Per episode: build full sequence [P(s_0), P(s_1), ..., P(s_L)],
+           apply SG smooth, then diff to get r_t = P(s_{t+1}) - P(s_t) for all t.
+           No step gets reward=0 by default.
         4. Write results back to self.rewards.
-        Returns None (no statistics needed by caller).
+        Returns None.
         """
         batch_size = 128
         total_samples = self.capacity if self.full else self.idx
 
-        # Step 1: compute P(s') for all samples
+        # Iterate in chronological order to avoid splice bug at circular buffer wrap point.
+        if self.full:
+            chron_idxs = np.concatenate([
+                np.arange(self.idx, self.capacity),
+                np.arange(0, self.idx),
+            ])
+        else:
+            chron_idxs = np.arange(0, self.idx)
+
+        # Step 1: compute P(s_{t+1}) in chronological order
         p_values = np.zeros(total_samples, dtype=np.float32)
         total_iter = int(np.ceil(total_samples / batch_size))
         for i in range(total_iter):
             start = i * batch_size
             end = min((i + 1) * batch_size, total_samples)
-            imgs = self.images[start:end]
+            batch_phys = chron_idxs[start:end]
+            imgs = self.images[batch_phys]
             imgs = np.transpose(imgs, (0, 3, 1, 2)).astype(np.float32) / 255.0
             p_values[start:end] = predictor.r_hat_batch(imgs).flatten()
 
-        # Step 2 & 3: per-episode smooth + diff
+        # Step 2: batch-compute P(s_0) for all episode starts (keyed by physical index)
+        p_s0 = {}
+        if self._episode_init_images:
+            init_items = list(self._episode_init_images.items())
+            for i in range(0, len(init_items), batch_size):
+                batch = init_items[i:i + batch_size]
+                idxs_batch = [item[0] for item in batch]
+                imgs_batch = np.array([item[1] for item in batch])
+                imgs_batch = np.transpose(imgs_batch, (0, 3, 1, 2)).astype(np.float32) / 255.0
+                p_vals = predictor.r_hat_batch(imgs_batch).flatten()
+                for idx, p in zip(idxs_batch, p_vals):
+                    p_s0[idx] = p
+
+        # Step 3: per-episode smooth + diff in chronological order
         new_rewards = np.zeros(total_samples, dtype=np.float32)
         sw_base = self.smooth_window if self.smooth_window % 2 == 1 else self.smooth_window + 1
         sw_base = max(3, sw_base)
 
         episode_start = 0
         for t in range(total_samples):
-            is_end = (self.not_dones[t, 0] < 0.5) or (t == total_samples - 1)
+            phys_t = chron_idxs[t]
+            is_end = (self.not_dones[phys_t, 0] < 0.5) or (t == total_samples - 1)
             if is_end:
-                ep_p = p_values[episode_start:t + 1]
-                ep_len = len(ep_p)
+                ep_phys_start = chron_idxs[episode_start]  # physical index of episode start
+                ep_p = p_values[episode_start:t + 1]  # [P(s_1), ..., P(s_L)]
+                # Prepend P(s_0) if available, else fall back to P(s_1)
+                p0 = p_s0.get(ep_phys_start, ep_p[0] if len(ep_p) > 0 else 0.0)
+                full_p = np.concatenate([[p0], ep_p])  # [P(s_0), P(s_1), ..., P(s_L)]
+                full_len = len(full_p)
                 if self.smooth_relabel:
-                    if ep_len < 3:
-                        smooth_ep_p = ep_p.copy()
+                    if full_len < 3:
+                        smooth_full_p = full_p.copy()
                     else:
-                        sw = min(sw_base, ep_len if ep_len % 2 == 1 else ep_len - 1)
+                        sw = min(sw_base, full_len if full_len % 2 == 1 else full_len - 1)
                         sw = max(3, sw)
-                        smooth_ep_p = savgol_filter(ep_p, window_length=sw, polyorder=2)
-                    ep_rewards = np.concatenate([[0.0], self.discount * smooth_ep_p[1:] - smooth_ep_p[:-1]])
+                        smooth_full_p = savgol_filter(full_p, window_length=sw, polyorder=2)
                 else:
-                    # Raw diff: no smooth, just diff of raw model output
-                    ep_rewards = np.concatenate([[0.0], self.discount * ep_p[1:] - ep_p[:-1]])
+                    smooth_full_p = full_p
+                # diff over L+1 values → L rewards, one per step, all correct
+                ep_rewards = self.discount * smooth_full_p[1:] - smooth_full_p[:-1]
                 new_rewards[episode_start:t + 1] = ep_rewards
                 episode_start = t + 1
 
-        self.rewards[:total_samples] = (new_rewards * self.reward_scale).reshape(-1, 1)
+        # Write back to physical positions
+        self.rewards[chron_idxs] = (new_rewards * self.reward_scale).reshape(-1, 1)
         torch.cuda.empty_cache()
         return None
 
