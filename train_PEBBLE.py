@@ -258,6 +258,22 @@ class Workspace(object):
             rewards = []
             t_idx = 0
             curr_state_rgb = None  # for progress_diff online reward
+            # For progress_diff: render s_0 so step-0 reward = P(s_1) - P(s_0), not 0
+            if self.use_progress_diff_reward and self.cfg.image_reward:
+                if "metaworld" in self.cfg.env:
+                    _s0 = self.env.render()
+                    _s0 = _s0[::-1, :, :]
+                    if "drawer" in self.cfg.env or "sweep" in self.cfg.env:
+                        _s0 = _s0[100:400, 100:400, :]
+                elif self.cfg.env in ["CartPole-v1", "Acrobot-v1", "MountainCar-v0", "Pendulum-v0"]:
+                    _s0 = self.env.render(mode='rgb_array')
+                elif 'softgym' in self.cfg.env:
+                    _s0 = self.env.render(mode='rgb_array', hide_picker=True)
+                else:
+                    _s0 = self.env.render(mode='rgb_array')
+                if 'Water' not in self.cfg.env and 'Rope' not in self.cfg.env:
+                    _s0 = cv2.resize(_s0, (self.image_height, self.image_width))
+                curr_state_rgb = _s0
 
             while not done:
                 with utils.eval_mode(self.agent):
@@ -383,7 +399,7 @@ class Workspace(object):
                 try:
                     video_tensor = video_frames.transpose(0, 3, 1, 2)
                     wandb.log(
-                        {"eval/video": wandb.Video(video_tensor, fps=12, format="gif")},
+                        {"eval_step/video": wandb.Video(video_tensor, fps=12, format="gif")},
                         step=self.step
                     )
                 except Exception as e:
@@ -428,19 +444,17 @@ class Workspace(object):
         self.logger.dump(self.step)
 
         eval_metrics = {
-            "eval/episode_reward": average_episode_reward,
-            "eval/true_episode_reward": average_true_episode_reward,
+            "eval_step/episode_reward": average_episode_reward,
+            "eval_step/true_episode_reward": average_true_episode_reward,
         }
         if self.log_success:
             self.eval_success_history.append(success_rate)
             success_rate_ma10 = float(np.mean(self.eval_success_history))
-            eval_metrics["eval/success_rate"] = success_rate
-            eval_metrics["eval/success_rate_ma10"] = success_rate_ma10
-        if eval_cnt is not None:
-            eval_metrics["eval_cnt"] = eval_cnt
+            eval_metrics["eval_step/success_rate"] = success_rate
+            eval_metrics["eval_step/success_rate_ma10"] = success_rate_ma10
         wandb.log(eval_metrics, step=self.step)
         if episode is not None:
-            ep_eval_metrics = {f"ep/{k}": v for k, v in eval_metrics.items()}
+            ep_eval_metrics = {f"eval_episode/{k[10:]}": v for k, v in eval_metrics.items()}
             ep_eval_metrics["episode"] = episode
             wandb.log(ep_eval_metrics, step=self.step)
 
@@ -505,9 +519,6 @@ class Workspace(object):
 
         # Track success history for the last 100 episodes
         success_history = deque(maxlen=100)
-        # Track all success rates computed every 100 episodes
-        success_rate_history = []
-        episode_checkpoints = []
 
         interact_count = 0
         reward_learning_acc = 0
@@ -555,11 +566,11 @@ class Workspace(object):
 
                             # Log to wandb (wandb will automatically create plots)
                             wandb.log({
-                                "train/success_rate_per_100ep": current_success_rate,
+                                "train_step/success_rate_per_100ep": current_success_rate,
                             }, step=self.step)
                             if _use_episode:
                                 wandb.log({
-                                    "ep/train/success_rate_per_100ep": current_success_rate,
+                                    "train_episode/success_rate_per_100ep": current_success_rate,
                                     "episode": episode,
                                 }, step=self.step)
 
@@ -589,21 +600,20 @@ class Workspace(object):
                 # Pack and send to W&B
                 if self.step > 0:
                     train_metrics = {
-                        "train/episode": episode,
-                        "train/episode_reward": episode_reward,
-                        "train/true_episode_reward": true_episode_reward,
-                        "train/total_feedback": self.total_feedback,
-                        "train/labeled_feedback": self.labeled_feedback,
-                        "train/reward_learning_acc": reward_learning_acc,
-                        "train/vlm_acc": vlm_acc,
+                        "train_step/episode_reward": episode_reward,
+                        "train_step/true_episode_reward": true_episode_reward,
+                        "train_step/total_feedback": self.total_feedback,
+                        "train_step/labeled_feedback": self.labeled_feedback,
+                        "train_step/reward_learning_acc": reward_learning_acc,
+                        "train_step/vlm_acc": vlm_acc,
                     }
                     if self.log_success:
-                        train_metrics["train/episode_success"] = episode_success
+                        train_metrics["train_step/episode_success"] = episode_success
                         # NEW: also send the cumulative success count (shows as a curve in W&B)
-                        train_metrics["train/total_success_episodes"] = self.total_success_episodes
+                        train_metrics["train_step/total_success_episodes"] = self.total_success_episodes
                     wandb.log(train_metrics, step=self.step)
                     if _use_episode:
-                        ep_train_metrics = {f"ep/{k}": v for k, v in train_metrics.items()}
+                        ep_train_metrics = {f"train_episode/{k[11:]}": v for k, v in train_metrics.items()}
                         ep_train_metrics["episode"] = episode
                         wandb.log(ep_train_metrics, step=self.step)
 
@@ -843,7 +853,7 @@ class Workspace(object):
             # ===================== reward computation (train) =====================
             p_curr = float('nan')
             p_next = float('nan')
-            _init_img_s0 = None  # will hold s_0 for buffer init_image (progress_diff only)
+            _curr_img_for_buf = None  # will hold s_t for buffer image (progress_diff only)
             if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                 if self.use_progress_diff_reward and self.cfg.image_reward:
                     # Online raw diff: P(s'_{t+1}) - P(s'_t), no EMA/normalization
@@ -861,9 +871,8 @@ class Workspace(object):
                         p_next = float(self.reward_model.r_hat(next_img))
                         reward_hat = (self.progress_diff_discount * p_next - p_curr) * self.progress_diff_reward_scale
                         self.reward_model.train()
-                    # Capture s_0 BEFORE overwriting curr_state_rgb with s_1
-                    if episode_step == 0 and curr_state_rgb is not None:
-                        _init_img_s0 = curr_state_rgb[::self.resize_factor, ::self.resize_factor, :]
+                    # Capture s_t BEFORE overwriting curr_state_rgb with s_{t+1}
+                    _curr_img_for_buf = curr_state_rgb[::self.resize_factor, ::self.resize_factor, :] if curr_state_rgb is not None else None
                     curr_state_rgb = rgb_image
                 elif not self.cfg.image_reward:
                     self.reward_model.eval()
@@ -950,12 +959,12 @@ class Workspace(object):
 
             # Per-step W&B logging (scalars)
             log_dict = {
-                "train/reward_hat": float(reward_hat),
-                "train/true_reward": float(reward),
+                "train_step/reward_hat": float(reward_hat),
+                "train_step/true_reward": float(reward),
             }
             if self.use_progress_diff_reward and self.cfg.image_reward:
-                log_dict["train/p_curr"] = p_curr
-                log_dict["train/p_next"] = p_next
+                log_dict["train_step/p_curr"] = p_curr
+                log_dict["train_step/p_next"] = p_next
             wandb.log(log_dict, step=self.step)
 
             # Allow infinite bootstrap
@@ -983,11 +992,14 @@ class Workspace(object):
             # Push transition into replay buffer (image/non-image paths)
             if self.cfg.image_reward and self.reward not in ["gt_task_reward", "sparse_task_reward"]:
                 if self.use_progress_diff_reward:
-                    _init_img = _init_img_s0 if episode_step == 0 else None
+                    # Store s_t (current state) in buffer; store s_{t+1} as terminal_image when done.
+                    # _curr_img_for_buf was captured BEFORE curr_state_rgb was updated to s_{t+1}.
+                    _buf_img = _curr_img_for_buf if _curr_img_for_buf is not None else rgb_image[::self.resize_factor, ::self.resize_factor, :]
+                    _term_img = rgb_image[::self.resize_factor, ::self.resize_factor, :] if done > 0.5 else None
                     self.replay_buffer.add(
                         obs, action, reward_hat, next_obs, done, done_no_max,
-                        image=rgb_image[::self.resize_factor, ::self.resize_factor, :],
-                        init_image=_init_img)
+                        image=_buf_img,
+                        terminal_image=_term_img)
                 else:
                     self.replay_buffer.add(
                         obs, action, reward_hat, next_obs, done, done_no_max,
@@ -1010,6 +1022,12 @@ class Workspace(object):
         # ── Episode-mode: run final eval for the last episode ──────────────────
         if _use_episode and _num_train_ep % _eval_ep_freq == 0:
             self.evaluate(eval_cnt=eval_cnt, episode=_num_train_ep)
+        # Log final partial success window if training didn't end on a 100-episode boundary
+        if _use_episode and self.log_success and len(success_history) > 0 and (_num_train_ep - 1) % 100 != 0:
+            final_rate = sum(success_history) / len(success_history)
+            wandb.log({"train_step/success_rate_per_100ep": final_rate}, step=self.step)
+            wandb.log({"train_episode/success_rate_per_100ep": final_rate,
+                       "episode": _num_train_ep - 1}, step=self.step)
         # ───────────────────────────────────────────────────────────────────────
 
         # Final checkpoint
@@ -1038,7 +1056,8 @@ def main(cfg):
 
     if getattr(cfg, 'use_episode', False):
         wandb.define_metric("episode")
-        wandb.define_metric("ep/*", step_metric="episode")
+        wandb.define_metric("train_episode/*", step_metric="episode")
+        wandb.define_metric("eval_episode/*", step_metric="episode")
 
     workspace = Workspace(cfg)
 

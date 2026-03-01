@@ -189,10 +189,17 @@ class ProgressDiffReplayBuffer(object):
     """
     Replay buffer for progress_diff mode.
 
-    Online reward_hat = P(s') (same as baseline, no diff online).
-    relabel_with_predictor: computes P(s') for all stored images in batches,
-    then per-episode applies Savitzky-Golay smooth + np.diff.
-    Only stores next_image (self.images), no curr_image needed.
+    Stores current-state images s_t in self.images (one per slot).
+    Stores terminal images s_L (state after last action of each episode) in
+    self._terminal_images, keyed by the physical slot of that episode's last step.
+
+    relabel_with_predictor:
+      1. Batch-compute P(s_t) for all stored current-state images.
+      2. Batch-compute P(s_L) for each episode's terminal image.
+      3. Per episode: full_p = [P(s_0),...,P(s_{L-1}), P(s_L)],
+         optionally SG-smooth, then diff → r_t = γ·P(s_{t+1}) - P(s_t).
+         All steps (including first and last) are fully correct for both
+         complete episodes and fragments after buffer wrap-around.
     """
 
     def __init__(self, obs_shape, action_shape, capacity, device, window=1,
@@ -214,12 +221,12 @@ class ProgressDiffReplayBuffer(object):
         self.not_dones_no_max = np.empty((capacity, 1), dtype=np.float32)
         self.window = window
 
-        # Stores next-state images s_{t+1}; named `images` to match ReplayBuffer interface
+        # Stores current-state images s_t (not next-state); named `images` to match ReplayBuffer interface
         self.images = np.empty((capacity, image_size, image_size, 3), dtype=np.uint8)
 
-        # episode_init_images[buf_idx] = s_0 image for the episode starting at buf_idx
-        # Only populated for first steps of each episode (sparse, low memory)
-        self._episode_init_images = {}
+        # _terminal_images[buf_idx] = s_L image (state after last action of the episode
+        # whose last step occupies buf_idx).  Keyed by the physical slot of the done step.
+        self._terminal_images = {}
 
         self.idx = 0
         self.last_save = 0
@@ -228,10 +235,10 @@ class ProgressDiffReplayBuffer(object):
     def __len__(self):
         return self.capacity if self.full else self.idx
 
-    def add(self, obs, action, reward, next_obs, done, done_no_max, image=None, init_image=None):
-        # Clean up stale episode_init_image if this slot is being overwritten
-        if self.idx in self._episode_init_images:
-            del self._episode_init_images[self.idx]
+    def add(self, obs, action, reward, next_obs, done, done_no_max, image=None, terminal_image=None):
+        # Clean up stale terminal_image if this slot is being overwritten
+        if self.idx in self._terminal_images:
+            del self._terminal_images[self.idx]
 
         np.copyto(self.obses[self.idx], obs)
         np.copyto(self.actions[self.idx], action)
@@ -243,9 +250,9 @@ class ProgressDiffReplayBuffer(object):
         if image is not None:
             np.copyto(self.images[self.idx], image)
 
-        # Store s_0 for this episode (only passed at episode_step == 0)
-        if init_image is not None:
-            self._episode_init_images[self.idx] = init_image.copy()
+        # Store terminal image s_L at the done step (only passed when done=True)
+        if terminal_image is not None:
+            self._terminal_images[self.idx] = terminal_image.copy()
 
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
@@ -255,11 +262,10 @@ class ProgressDiffReplayBuffer(object):
         Relabel rewards using per-episode SG smooth + diff.
 
         Steps:
-        1. Batch-compute P(s_{t+1}) for all stored next-state images.
-        2. Batch-compute P(s_0) for each episode start from _episode_init_images.
-        3. Per episode: build full sequence [P(s_0), P(s_1), ..., P(s_L)],
-           apply SG smooth, then diff to get r_t = P(s_{t+1}) - P(s_t) for all t.
-           No step gets reward=0 by default.
+        1. Batch-compute P(s_t) for all stored current-state images.
+        2. Batch-compute P(s_L) for each episode's terminal image from _terminal_images.
+        3. Per episode: full_p = [P(s_0),...,P(s_{L-1}), P(s_L)],
+           optionally SG-smooth, then diff → r_t = γ·P(s_{t+1}) - P(s_t).
         4. Write results back to self.rewards.
         Returns None.
         """
@@ -275,7 +281,7 @@ class ProgressDiffReplayBuffer(object):
         else:
             chron_idxs = np.arange(0, self.idx)
 
-        # Step 1: compute P(s_{t+1}) in chronological order
+        # Step 1: compute P(s_t) for all stored current-state images in chronological order
         p_values = np.zeros(total_samples, dtype=np.float32)
         total_iter = int(np.ceil(total_samples / batch_size))
         for i in range(total_iter):
@@ -286,18 +292,18 @@ class ProgressDiffReplayBuffer(object):
             imgs = np.transpose(imgs, (0, 3, 1, 2)).astype(np.float32) / 255.0
             p_values[start:end] = predictor.r_hat_batch(imgs).flatten()
 
-        # Step 2: batch-compute P(s_0) for all episode starts (keyed by physical index)
-        p_s0 = {}
-        if self._episode_init_images:
-            init_items = list(self._episode_init_images.items())
-            for i in range(0, len(init_items), batch_size):
-                batch = init_items[i:i + batch_size]
-                idxs_batch = [item[0] for item in batch]
+        # Step 2: batch-compute P(s_L) for all episode terminal images (keyed by physical slot)
+        terminal_p_values = {}
+        if self._terminal_images:
+            term_items = list(self._terminal_images.items())
+            for i in range(0, len(term_items), batch_size):
+                batch = term_items[i:i + batch_size]
+                phys_idxs = [item[0] for item in batch]
                 imgs_batch = np.array([item[1] for item in batch])
                 imgs_batch = np.transpose(imgs_batch, (0, 3, 1, 2)).astype(np.float32) / 255.0
                 p_vals = predictor.r_hat_batch(imgs_batch).flatten()
-                for idx, p in zip(idxs_batch, p_vals):
-                    p_s0[idx] = p
+                for idx, p in zip(phys_idxs, p_vals):
+                    terminal_p_values[idx] = p
 
         # Step 3: per-episode smooth + diff in chronological order
         new_rewards = np.zeros(total_samples, dtype=np.float32)
@@ -309,11 +315,12 @@ class ProgressDiffReplayBuffer(object):
             phys_t = chron_idxs[t]
             is_end = (self.not_dones[phys_t, 0] < 0.5) or (t == total_samples - 1)
             if is_end:
-                ep_phys_start = chron_idxs[episode_start]  # physical index of episode start
-                ep_p = p_values[episode_start:t + 1]  # [P(s_1), ..., P(s_L)]
-                # Prepend P(s_0) if available, else fall back to P(s_1)
-                p0 = p_s0.get(ep_phys_start, ep_p[0] if len(ep_p) > 0 else 0.0)
-                full_p = np.concatenate([[p0], ep_p])  # [P(s_0), P(s_1), ..., P(s_L)]
+                ep_end_phys = chron_idxs[t]
+                ep_p = p_values[episode_start:t + 1]        # [P(s_0), ..., P(s_{L-1})]
+                # Get P(s_L) from terminal image; fall back to P(s_{L-1}) only for partial
+                # episodes forced-ended by t==total_samples-1 (step-mode mid-episode relabel)
+                terminal_p = terminal_p_values.get(ep_end_phys, ep_p[-1] if len(ep_p) > 0 else 0.0)
+                full_p = np.append(ep_p, terminal_p)        # [P(s_0), ..., P(s_{L-1}), P(s_L)]
                 full_len = len(full_p)
                 if self.smooth_relabel:
                     if full_len < 3:
@@ -324,7 +331,7 @@ class ProgressDiffReplayBuffer(object):
                         smooth_full_p = savgol_filter(full_p, window_length=sw, polyorder=2)
                 else:
                     smooth_full_p = full_p
-                # diff over L+1 values → L rewards, one per step, all correct
+                # diff over L+1 values → L rewards: r_t = γ·P(s_{t+1}) - P(s_t)
                 ep_rewards = self.discount * smooth_full_p[1:] - smooth_full_p[:-1]
                 new_rewards[episode_start:t + 1] = ep_rewards
                 episode_start = t + 1
