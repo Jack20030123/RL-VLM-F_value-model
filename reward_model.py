@@ -340,10 +340,16 @@ class RewardModel:
                 self.img_inputs.append(flat_img)
         elif done:
             if 'Cloth' not in self.env_name:
-                self.inputs[-1] = np.concatenate([self.inputs[-1], flat_input])
-                self.targets[-1] = np.concatenate([self.targets[-1], flat_target])
-                if img is not None:
-                    self.img_inputs[-1] = np.concatenate([self.img_inputs[-1], flat_img], axis=0)
+                if len(self.inputs[-1]) == 0:
+                    self.inputs[-1] = flat_input
+                    self.targets[-1] = flat_target
+                    if img is not None:
+                        self.img_inputs[-1] = flat_img
+                else:
+                    self.inputs[-1] = np.concatenate([self.inputs[-1], flat_input])
+                    self.targets[-1] = np.concatenate([self.targets[-1], flat_target])
+                    if img is not None:
+                        self.img_inputs[-1] = np.concatenate([self.img_inputs[-1], flat_img], axis=0)
 
                 # FIFO
                 if len(self.inputs) > self.max_size:
