@@ -20,7 +20,7 @@ def api_call(img_path, prompt, temperature=0):
     base64_image = encode_image(img_path)
 
     response = client.chat.completions.create(
-            model="gpt-4-vision-preview",
+            model="gpt-5-nano",
             messages=[
                 {
                 "role": "user",
@@ -36,7 +36,7 @@ def api_call(img_path, prompt, temperature=0):
                         "type": "text",
                         "text": prompt,
                     },
-                    
+
                 ],
                 }
             ],
@@ -51,7 +51,7 @@ def api_call_2(img1_path, img2_path, prompt, temperature=0):
     base64_image2 = encode_image(img2_path)
 
     response = client.chat.completions.create(
-            model="gpt-4-vision-preview",
+            model="gpt-5-nano",
             messages=[
                 {
                 "role": "user",
@@ -103,7 +103,7 @@ Image 2:
 
 def extract_answer(vision_response, summary_prompt, temperature=0):
     summary_response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-5-nano",
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": summary_prompt.format(vision_response)},

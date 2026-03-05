@@ -56,6 +56,7 @@ class Workspace(object):
             self.log_success = True
         elif cfg.env in ["CartPole-v1", "Acrobot-v1", "MountainCar-v0", "Pendulum-v0"]:
             self.env = utils.make_classic_control_env(cfg)
+            self.log_success = True
         elif 'softgym' in cfg.env:
             self.env = utils.make_softgym_env(cfg)
             self.log_success = True
@@ -103,7 +104,7 @@ class Workspace(object):
         if self.cfg.image_reward:
             ep_cap_episodes = int(getattr(cfg, 'image_replay_capacity_episodes', 0))
             if _use_episode and ep_cap_episodes > 0:
-                _max_ep_steps = int(getattr(cfg, 'max_episode_steps', 0)) or 500
+                _max_ep_steps = int(getattr(cfg, 'max_episode_steps', 0)) or getattr(self.env, '_max_episode_steps', 500)
                 cap = ep_cap_episodes * _max_ep_steps
             else:
                 img_capacity = getattr(cfg, "image_replay_capacity", None)
@@ -549,7 +550,8 @@ class Workspace(object):
                     self.logger.log('train/reward_learning_acc', reward_learning_acc, self.step)
                     self.logger.log('train/vlm_acc', vlm_acc, self.step)
                     for key, value in extra.items():
-                        self.logger.log('train/' + key, value, self.step)
+                        if isinstance(value, (int, float)) and not isinstance(value, bool):
+                            self.logger.log('train/' + key, value, self.step)
 
                     # NEW: increment and log the cumulative count of successful episodes
                     if self.log_success:

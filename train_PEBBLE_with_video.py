@@ -73,6 +73,7 @@ class Workspace(object):
             self.log_success = True
         elif cfg.env in ["CartPole-v1", "Acrobot-v1", "MountainCar-v0", "Pendulum-v0"]:
             self.env = utils.make_classic_control_env(cfg)
+            self.log_success = True
         elif 'softgym' in cfg.env:
             self.env = utils.make_softgym_env(cfg)
             self.log_success = True  # Enable success tracking for softgym
@@ -120,7 +121,7 @@ class Workspace(object):
         if self.cfg.image_reward:
             ep_cap_episodes = int(getattr(cfg, 'image_replay_capacity_episodes', 0))
             if _use_episode and ep_cap_episodes > 0:
-                _max_ep_steps = int(getattr(cfg, 'max_episode_steps', 0)) or 500
+                _max_ep_steps = int(getattr(cfg, 'max_episode_steps', 0)) or getattr(self.env, '_max_episode_steps', 500)
                 cap = ep_cap_episodes * _max_ep_steps
             else:
                 img_capacity = getattr(cfg, "image_replay_capacity", None)
@@ -619,6 +620,16 @@ class Workspace(object):
                         # Only save if episode was successful
                         should_save_video = (episode_success > 0)
 
+                    # ClothFoldDiagonal: horizon=1 so only 1 frame per step.
+                    # Replace with softgym's internal video_frames for a watchable video.
+                    if 'ClothFoldDiagonal' in self.cfg.env and self.episode_recorder.recording:
+                        sim_frames = getattr(self.env, 'video_frames', None)
+                        if sim_frames is not None and len(sim_frames) > 1:
+                            last_reward = self.episode_recorder.visualizer.rewards[-1] if self.episode_recorder.visualizer.rewards else 0.0
+                            self.episode_recorder.visualizer.reset_episode()
+                            for f in sim_frames:
+                                self.episode_recorder.visualizer.add_frame(f, last_reward)
+
                     self.episode_recorder.end_episode(save_video=should_save_video, save_gif=False)
 
                 # Episode boundary logging (for the episode that just finished)
@@ -628,7 +639,8 @@ class Workspace(object):
                     self.logger.log('train/reward_learning_acc', reward_learning_acc, self.step)
                     self.logger.log('train/vlm_acc', vlm_acc, self.step)
                     for key, value in extra.items():
-                        self.logger.log('train/' + key, value, self.step)
+                        if isinstance(value, (int, float)) and not isinstance(value, bool):
+                            self.logger.log('train/' + key, value, self.step)
 
                     # NEW: increment and log the cumulative count of successful episodes
                     if self.log_success:
@@ -1125,6 +1137,14 @@ class Workspace(object):
             should_save_video = True
             if self.save_env_reward_video_success_only and self.log_success:
                 should_save_video = (episode_success > 0)
+            # ClothFoldDiagonal: replace single frame with softgym simulation frames
+            if 'ClothFoldDiagonal' in self.cfg.env and self.episode_recorder.recording:
+                sim_frames = getattr(self.env, 'video_frames', None)
+                if sim_frames is not None and len(sim_frames) > 1:
+                    last_reward = self.episode_recorder.visualizer.rewards[-1] if self.episode_recorder.visualizer.rewards else 0.0
+                    self.episode_recorder.visualizer.reset_episode()
+                    for f in sim_frames:
+                        self.episode_recorder.visualizer.add_frame(f, last_reward)
             self.episode_recorder.end_episode(save_video=should_save_video, save_gif=False)
             # 2. Final eval (only if the last episode aligns with eval frequency)
             if _num_train_ep % _eval_ep_freq == 0:
