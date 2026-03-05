@@ -120,9 +120,10 @@ def gpt4v_infer(query_prompt, summary_prompt, img_path):
     try:
         os.environ['OPENAI_API_KEY'] = list_of_api_keys[api_key_idx]
         response = api_call(img_path, query_prompt)
-    except:
-       return -1
-        
+    except Exception as e:
+        print(f"[gpt4v_infer] API call failed: {e}")
+        return -1
+
     result = ''
     for choice in response.choices:
         result += choice.message.content
@@ -134,7 +135,8 @@ def gpt4v_infer(query_prompt, summary_prompt, img_path):
         print(res)
 
         return res
-    except:
+    except Exception as e:
+        print(f"[gpt4v_infer] extract_answer failed: {e}")
         return -1
 
 def gpt4v_infer_2(query_prompt, summary_prompt, img1_path, img2_path):
@@ -142,9 +144,10 @@ def gpt4v_infer_2(query_prompt, summary_prompt, img1_path, img2_path):
     try:
         os.environ['OPENAI_API_KEY'] = list_of_api_keys[api_key_idx]
         response = api_call_2(img1_path, img2_path, query_prompt)
-    except:
-       return -1
-        
+    except Exception as e:
+        print(f"[gpt4v_infer_2] API call failed: {e}")
+        return -1
+
     result = ''
     for choice in response.choices:
         result += choice.message.content
@@ -154,7 +157,8 @@ def gpt4v_infer_2(query_prompt, summary_prompt, img1_path, img2_path):
     try:
         res = extract_answer(result, summary_prompt)
         return res
-    except:
+    except Exception as e:
+        print(f"[gpt4v_infer_2] extract_answer failed: {e}")
         return -1
     
 
