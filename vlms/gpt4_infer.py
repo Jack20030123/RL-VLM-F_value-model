@@ -40,10 +40,9 @@ def api_call(img_path, prompt, temperature=0):
                 ],
                 }
             ],
-            temperature=temperature,
-            max_tokens=1000,
+            max_completion_tokens=1000,
         )
-    
+
     return response
 
 def api_call_2(img1_path, img2_path, prompt, temperature=0):
@@ -95,10 +94,9 @@ Image 2:
                 ],
                 }
             ],
-            temperature=temperature,
-            max_tokens=1000,
+            max_completion_tokens=1000,
         )
-    
+
     return response
 
 def extract_answer(vision_response, summary_prompt, temperature=0):
@@ -108,7 +106,6 @@ def extract_answer(vision_response, summary_prompt, temperature=0):
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": summary_prompt.format(vision_response)},
         ],
-        temperature=temperature,
     )
 
     result = ''
