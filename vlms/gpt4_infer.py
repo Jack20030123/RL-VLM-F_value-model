@@ -40,7 +40,6 @@ def api_call(img_path, prompt, temperature=0):
                 ],
                 }
             ],
-            max_completion_tokens=1000,
         )
 
     return response
@@ -94,7 +93,6 @@ Image 2:
                 ],
                 }
             ],
-            max_completion_tokens=1000,
         )
 
     return response
