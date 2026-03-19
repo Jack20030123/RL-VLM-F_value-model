@@ -30,7 +30,7 @@ from scipy.signal import savgol_filter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from reward_model import gen_image_net
+from reward_model import gen_image_net, gen_image_net2
 from agent.actor import DiagGaussianActor
 from softgym.registered_env import env_arg_dict, SOFTGYM_ENVS
 from softgym.utils.normalized_env import normalize
@@ -108,9 +108,7 @@ def load_reward_model(model_dir, step,
     ensemble = []
 
     for member in range(ensemble_size):
-        model = gen_image_net(image_height, image_width,
-                              conv_kernel_sizes, conv_n_channels,
-                              conv_strides).float().to(device)
+        model = gen_image_net2().float().to(device)
 
         model_path = os.path.join(model_dir, f'reward_model_{step}_{member}.pt')
         if not os.path.exists(model_path):
