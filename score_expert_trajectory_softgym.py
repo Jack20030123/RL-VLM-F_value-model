@@ -454,22 +454,50 @@ def process_env(cfg, args):
     # Correlation analysis - Pre-success
     if success_step is not None:
         pre_success_end = success_step + 1
-        reward_hats_pre = reward_hats[:pre_success_end]
-        gt_rewards_pre = gt_rewards[:pre_success_end]
-        task_progress_pre = task_progress[:pre_success_end]
+        # Initialize pre-success variables to None (set properly if enough data points)
+        presuccess_global_smooth_rhat = None
+        presuccess_global_smooth_diff = None
+        presuccess_global_smooth_diff_padded = None
+        presuccess_cubic_smooth_rhat = None
+        presuccess_cubic_smooth_diff = None
+        presuccess_cubic_smooth_diff_padded = None
+        sw_global = None
+        po_cubic = None
+        if pre_success_end < 2:
+            print(f"\n=== Skipping Pre-Success correlation: only {pre_success_end} data point(s), need >= 2 ===")
+        elif pre_success_end == 2:
+            # Enough for value-level correlation but not diff-level
+            reward_hats_pre = reward_hats[:pre_success_end]
+            gt_rewards_pre = gt_rewards[:pre_success_end]
+            task_progress_pre = task_progress[:pre_success_end]
 
-        print(f"\n=== Correlation Analysis: ORIGINAL reward_hat (Pre-Success, steps 0-{success_step}, n={len(reward_hats_pre)}) ===")
+            print(f"\n=== Correlation Analysis: ORIGINAL reward_hat (Pre-Success, steps 0-{success_step}, n={len(reward_hats_pre)}) ===")
 
-        pearson_gt_pre, p_gt_pre = pearsonr(reward_hats_pre, gt_rewards_pre)
-        spearman_gt_pre, _ = spearmanr(reward_hats_pre, gt_rewards_pre)
-        print(f"reward_hat vs GT Reward:      Pearson={pearson_gt_pre:.4f} (p={p_gt_pre:.2e}), Spearman={spearman_gt_pre:.4f}")
+            pearson_gt_pre, p_gt_pre = pearsonr(reward_hats_pre, gt_rewards_pre)
+            spearman_gt_pre, _ = spearmanr(reward_hats_pre, gt_rewards_pre)
+            print(f"reward_hat vs GT Reward:      Pearson={pearson_gt_pre:.4f} (p={p_gt_pre:.2e}), Spearman={spearman_gt_pre:.4f}")
 
-        pearson_prog_pre, p_prog_pre = pearsonr(reward_hats_pre, task_progress_pre)
-        spearman_prog_pre, _ = spearmanr(reward_hats_pre, task_progress_pre)
-        print(f"reward_hat vs Task Progress:  Pearson={pearson_prog_pre:.4f} (p={p_prog_pre:.2e}), Spearman={spearman_prog_pre:.4f}")
+            pearson_prog_pre, p_prog_pre = pearsonr(reward_hats_pre, task_progress_pre)
+            spearman_prog_pre, _ = spearmanr(reward_hats_pre, task_progress_pre)
+            print(f"reward_hat vs Task Progress:  Pearson={pearson_prog_pre:.4f} (p={p_prog_pre:.2e}), Spearman={spearman_prog_pre:.4f}")
 
-        # Diff form - Pre-success
-        if pre_success_end > 1:
+            print(f"\n=== Skipping Pre-Success DIFF correlations: only 1 diff point, need >= 2 ===")
+        else:
+            reward_hats_pre = reward_hats[:pre_success_end]
+            gt_rewards_pre = gt_rewards[:pre_success_end]
+            task_progress_pre = task_progress[:pre_success_end]
+
+            print(f"\n=== Correlation Analysis: ORIGINAL reward_hat (Pre-Success, steps 0-{success_step}, n={len(reward_hats_pre)}) ===")
+
+            pearson_gt_pre, p_gt_pre = pearsonr(reward_hats_pre, gt_rewards_pre)
+            spearman_gt_pre, _ = spearmanr(reward_hats_pre, gt_rewards_pre)
+            print(f"reward_hat vs GT Reward:      Pearson={pearson_gt_pre:.4f} (p={p_gt_pre:.2e}), Spearman={spearman_gt_pre:.4f}")
+
+            pearson_prog_pre, p_prog_pre = pearsonr(reward_hats_pre, task_progress_pre)
+            spearman_prog_pre, _ = spearmanr(reward_hats_pre, task_progress_pre)
+            print(f"reward_hat vs Task Progress:  Pearson={pearson_prog_pre:.4f} (p={p_prog_pre:.2e}), Spearman={spearman_prog_pre:.4f}")
+
+            # Diff form - Pre-success (pre_success_end >= 3, so at least 2 diff points)
             reward_hat_diffs_pre = reward_hat_diffs[:pre_success_end - 1]
             gt_rewards_diff_pre = gt_rewards_for_diff[:pre_success_end - 1]
             progress_diffs_pre = progress_diffs[:pre_success_end - 1]
@@ -595,32 +623,6 @@ def process_env(cfg, args):
             pearson_gt_actual_diff_pcsdiff, p_gt_actual_diff_pcsdiff = pearsonr(presuccess_cubic_smooth_diff, gt_rewards_actual_diff_pre)
             spearman_gt_actual_diff_pcsdiff, _ = spearmanr(presuccess_cubic_smooth_diff, gt_rewards_actual_diff_pre)
             print(f"presuccess_cubic_smooth_diff vs diff(GT Reward): Pearson={pearson_gt_actual_diff_pcsdiff:.4f} (p={p_gt_actual_diff_pcsdiff:.2e}), Spearman={spearman_gt_actual_diff_pcsdiff:.4f}")
-        else:
-            pearson_gt_diff_pre = p_gt_diff_pre = spearman_gt_diff_pre = None
-            pearson_progdiff_diff_pre = p_progdiff_diff_pre = spearman_progdiff_diff_pre = None
-            pearson_gt_smooth_pre = pearson_prog_smooth_pre = pearson_gt_sdiff_pre = pearson_pdiff_sdiff_pre = None
-            p_gt_smooth_pre = p_prog_smooth_pre = p_gt_sdiff_pre = p_pdiff_sdiff_pre = None
-            spearman_gt_smooth_pre = spearman_prog_smooth_pre = spearman_gt_sdiff_pre = spearman_pdiff_sdiff_pre = None
-            pearson_gt_msmooth_pre = pearson_prog_msmooth_pre = pearson_gt_msdiff_pre = pearson_pdiff_msdiff_pre = None
-            p_gt_msmooth_pre = p_prog_msmooth_pre = p_gt_msdiff_pre = p_pdiff_msdiff_pre = None
-            spearman_gt_msmooth_pre = spearman_prog_msmooth_pre = spearman_gt_msdiff_pre = spearman_pdiff_msdiff_pre = None
-            presuccess_global_smooth_rhat = None
-            presuccess_global_smooth_diff = None
-            presuccess_global_smooth_diff_padded = None
-            sw_global = None
-            pearson_gt_pgsmooth = pearson_prog_pgsmooth = pearson_gt_pgsdiff = pearson_pdiff_pgsdiff = None
-            p_gt_pgsmooth = p_prog_pgsmooth = p_gt_pgsdiff = p_pdiff_pgsdiff = None
-            spearman_gt_pgsmooth = spearman_prog_pgsmooth = spearman_gt_pgsdiff = spearman_pdiff_pgsdiff = None
-            gt_rewards_actual_diff_pre = None
-            pearson_gt_actual_diff_pgsdiff = p_gt_actual_diff_pgsdiff = spearman_gt_actual_diff_pgsdiff = None
-            presuccess_cubic_smooth_rhat = None
-            presuccess_cubic_smooth_diff = None
-            presuccess_cubic_smooth_diff_padded = None
-            po_cubic = None
-            pearson_gt_pcsmooth = pearson_prog_pcsmooth = pearson_gt_pcsdiff = pearson_pdiff_pcsdiff = None
-            p_gt_pcsmooth = p_prog_pcsmooth = p_gt_pcsdiff = p_pdiff_pcsdiff = None
-            spearman_gt_pcsmooth = spearman_prog_pcsmooth = spearman_gt_pcsdiff = spearman_pdiff_pcsdiff = None
-            pearson_gt_actual_diff_pcsdiff = p_gt_actual_diff_pcsdiff = spearman_gt_actual_diff_pcsdiff = None
     else:
         pre_success_end = None
         pearson_gt_pre = p_gt_pre = spearman_gt_pre = None
@@ -711,7 +713,7 @@ def process_env(cfg, args):
         f.write(f"  Pearson:  {pearson_progdiff_diff_first30:.6f} (p={p_progdiff_diff_first30:.2e})\n")
         f.write(f"  Spearman: {spearman_progdiff_diff_first30:.6f}\n\n")
 
-        if success_step is not None and pre_success_end > 1:
+        if success_step is not None and pre_success_end > 2:
             f.write(f"=== Pre-Success (steps 0-{success_step-1}, n={len(reward_hat_diffs_pre)}) ===\n")
             f.write(f"reward_hat_diff vs GT Reward:\n")
             f.write(f"  Pearson:  {pearson_gt_diff_pre:.6f} (p={p_gt_diff_pre:.2e})\n")
@@ -753,7 +755,7 @@ def process_env(cfg, args):
         f.write(f"  Pearson:  {pearson_pdiff_sdiff_first30:.6f} (p={p_pdiff_sdiff_first30:.2e})\n")
         f.write(f"  Spearman: {spearman_pdiff_sdiff_first30:.6f}\n\n")
 
-        if success_step is not None and pre_success_end > 1:
+        if success_step is not None and pre_success_end > 2:
             f.write(f"=== Pre-Success (steps 0-{success_step}, n={pre_success_end}) ===\n")
             f.write(f"smooth_reward_hat vs GT Reward:\n")
             f.write(f"  Pearson:  {pearson_gt_smooth_pre:.6f} (p={p_gt_smooth_pre:.2e})\n")
@@ -802,7 +804,7 @@ def process_env(cfg, args):
         f.write(f"  Pearson:  {pearson_pdiff_msdiff_first30:.6f} (p={p_pdiff_msdiff_first30:.2e})\n")
         f.write(f"  Spearman: {spearman_pdiff_msdiff_first30:.6f}\n\n")
 
-        if success_step is not None and pre_success_end > 1:
+        if success_step is not None and pre_success_end > 2:
             f.write(f"=== Pre-Success (steps 0-{success_step}, n={pre_success_end}) ===\n")
             f.write(f"mirror_smooth_rhat vs GT Reward:\n")
             f.write(f"  Pearson:  {pearson_gt_msmooth_pre:.6f} (p={p_gt_msmooth_pre:.2e})\n")
