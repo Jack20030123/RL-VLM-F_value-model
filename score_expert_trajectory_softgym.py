@@ -1202,6 +1202,116 @@ def process_env(cfg, args):
                               env_name + f" (Pre-Success Global Smooth sw={sw_global})",
                               success_step, fps=2)
 
+    # --- Simple video: image + raw reward_hat + GT reward + reward_hat diff ---
+    def generate_video_simple(images_subset, reward_hats_subset, gt_rewards_subset,
+                              video_path, vid_env_name, success_step_local, fps=20):
+        """Video with 4 panels: image, raw reward_hat, GT reward, reward_hat diff."""
+        num_frames = len(images_subset)
+        rhat_diffs = np.diff(reward_hats_subset)
+        rhat_diffs_padded = np.concatenate([[0.0], rhat_diffs])  # pad first frame with 0
+
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+        # Top-left: Environment image
+        ax_img = axes[0, 0]
+        im = ax_img.imshow(images_subset[0])
+        ax_img.set_title('Environment', fontsize=12)
+        ax_img.axis('off')
+        step_text = ax_img.text(0.02, 0.98, '', transform=ax_img.transAxes,
+                                fontsize=12, verticalalignment='top',
+                                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+        # Top-right: reward_hat (raw values)
+        ax_rhat = axes[0, 1]
+        line_rhat, = ax_rhat.plot([], [], 'b-', linewidth=2)
+        ax_rhat.set_xlim(0, num_frames)
+        rhat_margin = max(0.1, (np.max(reward_hats_subset) - np.min(reward_hats_subset)) * 0.1)
+        ax_rhat.set_ylim(np.min(reward_hats_subset) - rhat_margin, np.max(reward_hats_subset) + rhat_margin)
+        ax_rhat.set_xlabel('Step')
+        ax_rhat.set_ylabel('reward_hat')
+        ax_rhat.set_title('Reward Model Output (raw)', fontsize=12)
+        ax_rhat.grid(True, alpha=0.3)
+        dot_rhat, = ax_rhat.plot([], [], 'bo', markersize=6)
+
+        # Bottom-left: GT Reward
+        ax_gt = axes[1, 0]
+        line_gt, = ax_gt.plot([], [], 'r-', linewidth=2)
+        ax_gt.set_xlim(0, num_frames)
+        gt_margin = max(0.1, (np.max(gt_rewards_subset) - np.min(gt_rewards_subset)) * 0.1)
+        ax_gt.set_ylim(np.min(gt_rewards_subset) - gt_margin, np.max(gt_rewards_subset) + gt_margin)
+        ax_gt.set_xlabel('Step')
+        ax_gt.set_ylabel('GT Reward')
+        ax_gt.set_title('GT Reward', fontsize=12)
+        ax_gt.grid(True, alpha=0.3)
+        dot_gt, = ax_gt.plot([], [], 'ro', markersize=6)
+
+        # Bottom-right: reward_hat diff
+        ax_diff = axes[1, 1]
+        line_diff, = ax_diff.plot([], [], 'm-', linewidth=2)
+        ax_diff.set_xlim(0, num_frames)
+        diff_margin = max(0.1, (np.max(rhat_diffs_padded) - np.min(rhat_diffs_padded)) * 0.1)
+        ax_diff.set_ylim(np.min(rhat_diffs_padded) - diff_margin, np.max(rhat_diffs_padded) + diff_margin)
+        ax_diff.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        ax_diff.set_xlabel('Step')
+        ax_diff.set_ylabel('Δ reward_hat')
+        ax_diff.set_title('Reward Model Diff (raw)', fontsize=12)
+        ax_diff.grid(True, alpha=0.3)
+        dot_diff, = ax_diff.plot([], [], 'mo', markersize=6)
+
+        plt.suptitle(f'Expert Trajectory - {vid_env_name}', fontsize=14)
+        plt.tight_layout()
+
+        def init():
+            line_rhat.set_data([], [])
+            line_gt.set_data([], [])
+            line_diff.set_data([], [])
+            dot_rhat.set_data([], [])
+            dot_gt.set_data([], [])
+            dot_diff.set_data([], [])
+            step_text.set_text('')
+            return line_rhat, line_gt, line_diff, dot_rhat, dot_gt, dot_diff, step_text, im
+
+        def animate(frame):
+            im.set_array(images_subset[frame])
+
+            status = "SUCCESS!" if success_step_local is not None and frame >= success_step_local else ""
+            step_text.set_text(f'Step: {frame}/{num_frames-1} {status}')
+
+            x_data = np.arange(frame + 1)
+
+            line_rhat.set_data(x_data, reward_hats_subset[:frame + 1])
+            line_gt.set_data(x_data, gt_rewards_subset[:frame + 1])
+            line_diff.set_data(x_data, rhat_diffs_padded[:frame + 1])
+
+            dot_rhat.set_data([frame], [reward_hats_subset[frame]])
+            dot_gt.set_data([frame], [gt_rewards_subset[frame]])
+            dot_diff.set_data([frame], [rhat_diffs_padded[frame]])
+
+            return line_rhat, line_gt, line_diff, dot_rhat, dot_gt, dot_diff, step_text, im
+
+        anim = FuncAnimation(fig, animate, init_func=init,
+                             frames=num_frames, interval=50, blit=True)
+
+        print(f"Saving video to {video_path} ({num_frames} frames, fps={fps})...")
+        writer = FFMpegWriter(fps=fps, metadata=dict(artist='RL-VLM-F'), bitrate=2400)
+        anim.save(video_path, writer=writer)
+        print(f"Saved video to {video_path}")
+
+        plt.close(fig)
+
+    # Generate simple video (full)
+    print(f"\n=== Generating Simple Video (raw + diff) ===")
+    video_path_simple = os.path.join(output_dir, 'trajectory_simple.mp4')
+    generate_video_simple(images, reward_hats, gt_rewards,
+                          video_path_simple, env_name, success_step)
+
+    # Generate simple video (first 30 steps, slower)
+    first_n_simple = min(30, len(images))
+    ss_simple = success_step if success_step is not None and success_step < first_n_simple else None
+    video_path_simple_short = os.path.join(output_dir, 'trajectory_simple_first30.mp4')
+    generate_video_simple(images[:first_n_simple], reward_hats[:first_n_simple], gt_rewards[:first_n_simple],
+                          video_path_simple_short, env_name + " (First 30 Steps)", ss_simple, fps=2)
+
     print(f"\n=== Done processing {env_name} ===\n")
     return reward_hats, reward_hat_diffs, gt_rewards, task_progress, progress_diffs
 
