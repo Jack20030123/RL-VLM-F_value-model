@@ -277,8 +277,8 @@ def process_env(cfg, args):
     # Use raw_images for video display
     images = raw_images
 
-    # Compute diff form: reward_hat_diff[i] = reward_hat[i+1] - reward_hat[i]
-    reward_hat_diffs = np.diff(reward_hats)  # length = len(reward_hats) - 1
+    # Compute diff form: reward_hat_diff[i] = 0.99 * reward_hat[i+1] - reward_hat[i]
+    reward_hat_diffs = 0.99 * reward_hats[1:] - reward_hats[:-1]
     # Align gt_rewards with diffs (use [:-1] to match diff indices)
     gt_rewards_for_diff = gt_rewards[:-1]
     # Compute progress diff for comparison
@@ -292,7 +292,7 @@ def process_env(cfg, args):
     smooth_reward_hats = savgol_filter(reward_hats, window_length=sw, polyorder=2)
     print(f"Applied Savitzky-Golay smoothing: window={sw}, polyorder=2")
     # Diff of smoothed values (N-1 values), aligned same as reward_hat_diffs
-    smooth_reward_hat_diffs = np.diff(smooth_reward_hats)
+    smooth_reward_hat_diffs = 0.99 * smooth_reward_hats[1:] - smooth_reward_hats[:-1]
     # Padded version (prepend 0) for video display: frame t shows smooth_P(t)-smooth_P(t-1)
     smooth_reward_hat_diffs_padded = np.concatenate([[0.0], smooth_reward_hat_diffs])
 
@@ -304,7 +304,7 @@ def process_env(cfg, args):
         padded_rh = reward_hats.copy()
     mirror_smooth_reward_hats = savgol_filter(padded_rh, window_length=sw, polyorder=2)[half_w: half_w + len(reward_hats)]
     print(f"Applied mirror-padded Savitzky-Golay smoothing: window={sw}, half_w={half_w}, polyorder=2")
-    mirror_smooth_reward_hat_diffs = np.diff(mirror_smooth_reward_hats)
+    mirror_smooth_reward_hat_diffs = 0.99 * mirror_smooth_reward_hats[1:] - mirror_smooth_reward_hats[:-1]
     mirror_smooth_reward_hat_diffs_padded = np.concatenate([[0.0], mirror_smooth_reward_hat_diffs])
 
     # Statistics
@@ -570,7 +570,7 @@ def process_env(cfg, args):
                 sw_global -= 1
             sw_global = max(3, sw_global)
             presuccess_global_smooth_rhat = savgol_filter(reward_hats_pre, window_length=sw_global, polyorder=2)
-            presuccess_global_smooth_diff = np.diff(presuccess_global_smooth_rhat)
+            presuccess_global_smooth_diff = 0.99 * presuccess_global_smooth_rhat[1:] - presuccess_global_smooth_rhat[:-1]
             presuccess_global_smooth_diff_padded = np.concatenate([[0.0], presuccess_global_smooth_diff])
 
             print(f"\n=== Correlation Analysis: PRE-SUCCESS GLOBAL SMOOTH (Pre-Success, steps 0-{success_step}, n={pre_success_end}, sw={sw_global}) ===")
@@ -602,7 +602,7 @@ def process_env(cfg, args):
             # Pre-success Cubic Global Smooth (polyorder=3)
             po_cubic = min(3, sw_global - 1)
             presuccess_cubic_smooth_rhat = savgol_filter(reward_hats_pre, window_length=sw_global, polyorder=po_cubic)
-            presuccess_cubic_smooth_diff = np.diff(presuccess_cubic_smooth_rhat)
+            presuccess_cubic_smooth_diff = 0.99 * presuccess_cubic_smooth_rhat[1:] - presuccess_cubic_smooth_rhat[:-1]
             presuccess_cubic_smooth_diff_padded = np.concatenate([[0.0], presuccess_cubic_smooth_diff])
 
             print(f"\n=== Correlation Analysis: PRE-SUCCESS CUBIC SMOOTH (polyorder={po_cubic}, sw={sw_global}, n={pre_success_end}) ===")
@@ -992,7 +992,7 @@ def process_env(cfg, args):
                               video_path, vid_env_name, success_step_local, fps=20):
         """Video with 4 panels: image, raw reward_hat, GT reward, reward_hat diff."""
         num_frames = len(images_subset)
-        rhat_diffs = np.diff(reward_hats_subset)
+        rhat_diffs = 0.99 * reward_hats_subset[1:] - reward_hats_subset[:-1]
         rhat_diffs_padded = np.concatenate([[0.0], rhat_diffs])
 
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
