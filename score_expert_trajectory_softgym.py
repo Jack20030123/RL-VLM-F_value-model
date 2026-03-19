@@ -43,6 +43,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DEFAULT_CONFIGS = [
     dict(
         env='softgym_RopeFlattenEasy',
+        default_steps=40,  # horizon from registered_env.py
         actor_model_dir='/project2/biyik_1165/RL-VLM-F_value-model/exp/gt_reward_rope/softgym_RopeFlattenEasy/2026-03-19-00-05-34/vlm_0bard_rewardgt_task_reward_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init1000_unsup9000_inter5000_maxfeed20000_seg50_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
         actor_step=130000,
         reward_model_dir='/project2/biyik_1165/RL-VLM-F_value-model/exp/baseline_gemini_rope/softgym_RopeFlattenEasy/2026-03-05-16-58-26/vlm_1gemini_free_form_rewardlearn_from_preference_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init250_unsup9000_inter5000_maxfeed20000_seg1_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
@@ -54,6 +55,7 @@ DEFAULT_CONFIGS = [
     ),
     dict(
         env='softgym_PassWater',
+        default_steps=75,  # horizon from registered_env.py
         actor_model_dir='/project2/biyik_1165/RL-VLM-F_value-model/exp/gt_reward_passwater/softgym_PassWater/2026-03-19-00-20-22/vlm_0bard_rewardgt_task_reward_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init1000_unsup9000_inter5000_maxfeed20000_seg50_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
         actor_step=210000,
         reward_model_dir='/project2/biyik_1165/RL-VLM-F_value-model/exp/baseline_gemini_passwater/softgym_PassWater/2026-03-06-01-51-50/vlm_1gemini_free_form_rewardlearn_from_preference_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init1000_unsup9000_inter5000_maxfeed20000_seg1_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
@@ -215,6 +217,7 @@ def process_env(cfg, args):
     image_height = cfg['image_height']
     image_width = cfg['image_width']
     resize_factor = cfg['resize_factor']
+    default_steps = cfg['default_steps']
     ensemble_size = args.ensemble_size
     smooth_window = args.smooth_window
     max_steps = args.max_steps
@@ -894,153 +897,8 @@ def process_env(cfg, args):
                         f'{cubic_rhat:.6f},{cubic_diff:.6f}\n')
         print(f"Saved pre-success step data to {csv_pre_path}")
 
-    # Function to generate video
-    def generate_video(images_subset, reward_hats_subset, gt_rewards_subset, task_progress_subset,
-                       video_path, vid_env_name, success_step_local, fps=20,
-                       reward_label="reward_hat", progress_label="Task Progress"):
-        num_frames = len(images_subset)
-
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-
-        # Top-left: Environment image
-        ax_img = axes[0, 0]
-        im = ax_img.imshow(images_subset[0])
-        ax_img.set_title('Environment', fontsize=12)
-        ax_img.axis('off')
-        step_text = ax_img.text(0.02, 0.98, '', transform=ax_img.transAxes,
-                                fontsize=12, verticalalignment='top',
-                                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-        # Top-right: reward_hat (raw values)
-        ax_rhat = axes[0, 1]
-        line_rhat, = ax_rhat.plot([], [], 'b-', linewidth=2)
-        ax_rhat.set_xlim(0, num_frames)
-        rhat_margin = max(0.1, (np.max(reward_hats_subset) - np.min(reward_hats_subset)) * 0.1)
-        ax_rhat.set_ylim(np.min(reward_hats_subset) - rhat_margin, np.max(reward_hats_subset) + rhat_margin)
-        ax_rhat.set_xlabel('Step')
-        ax_rhat.set_ylabel(reward_label)
-        ax_rhat.set_title(reward_label, fontsize=12)
-        ax_rhat.grid(True, alpha=0.3)
-        dot_rhat, = ax_rhat.plot([], [], 'bo', markersize=6)
-
-        # Bottom-left: GT Reward (raw values)
-        ax_gt = axes[1, 0]
-        line_gt, = ax_gt.plot([], [], 'r-', linewidth=2)
-        ax_gt.set_xlim(0, num_frames)
-        gt_margin = max(0.1, (np.max(gt_rewards_subset) - np.min(gt_rewards_subset)) * 0.1)
-        ax_gt.set_ylim(np.min(gt_rewards_subset) - gt_margin, np.max(gt_rewards_subset) + gt_margin)
-        ax_gt.set_xlabel('Step')
-        ax_gt.set_ylabel('GT Reward')
-        ax_gt.set_title('GT Reward', fontsize=12)
-        ax_gt.grid(True, alpha=0.3)
-        dot_gt, = ax_gt.plot([], [], 'ro', markersize=6)
-
-        # Bottom-right: Task Progress (raw values)
-        ax_prog = axes[1, 1]
-        line_prog, = ax_prog.plot([], [], 'g-', linewidth=2)
-        ax_prog.set_xlim(0, num_frames)
-        prog_margin = max(0.05, (np.max(task_progress_subset) - np.min(task_progress_subset)) * 0.1)
-        ax_prog.set_ylim(np.min(task_progress_subset) - prog_margin, np.max(task_progress_subset) + prog_margin)
-        ax_prog.set_xlabel('Step')
-        ax_prog.set_ylabel(progress_label)
-        ax_prog.set_title(progress_label, fontsize=12)
-        ax_prog.grid(True, alpha=0.3)
-        dot_prog, = ax_prog.plot([], [], 'go', markersize=6)
-
-        plt.suptitle(f'Expert Trajectory Analysis - {vid_env_name}', fontsize=14)
-        plt.tight_layout()
-
-        def init():
-            line_rhat.set_data([], [])
-            line_gt.set_data([], [])
-            line_prog.set_data([], [])
-            dot_rhat.set_data([], [])
-            dot_gt.set_data([], [])
-            dot_prog.set_data([], [])
-            step_text.set_text('')
-            return line_rhat, line_gt, line_prog, dot_rhat, dot_gt, dot_prog, step_text, im
-
-        def animate(frame):
-            im.set_array(images_subset[frame])
-
-            status = "SUCCESS!" if success_step_local is not None and frame >= success_step_local else ""
-            step_text.set_text(f'Step: {frame}/{num_frames-1} {status}')
-
-            x_data = np.arange(frame + 1)
-
-            line_rhat.set_data(x_data, reward_hats_subset[:frame + 1])
-            line_gt.set_data(x_data, gt_rewards_subset[:frame + 1])
-            line_prog.set_data(x_data, task_progress_subset[:frame + 1])
-
-            dot_rhat.set_data([frame], [reward_hats_subset[frame]])
-            dot_gt.set_data([frame], [gt_rewards_subset[frame]])
-            dot_prog.set_data([frame], [task_progress_subset[frame]])
-
-            return line_rhat, line_gt, line_prog, dot_rhat, dot_gt, dot_prog, step_text, im
-
-        anim = FuncAnimation(fig, animate, init_func=init,
-                             frames=num_frames, interval=50, blit=True)
-
-        print(f"Saving video to {video_path} ({num_frames} frames, fps={fps})...")
-        writer = FFMpegWriter(fps=fps, metadata=dict(artist='RL-VLM-F'), bitrate=2400)
-        anim.save(video_path, writer=writer)
-        print(f"Saved video to {video_path}")
-
-        plt.close(fig)
-
-    # Generate full video (Original)
-    print(f"\n=== Generating Full Animation Video (Original) ===")
-    video_path_full = os.path.join(output_dir, 'trajectory_analysis.mp4')
-    generate_video(images, reward_hats, gt_rewards, task_progress,
-                   video_path_full, env_name, success_step)
-
-    # Generate first 30 steps video (10x slower, Original)
-    print(f"\n=== Generating First 30 Steps Video (10x slower, Original) ===")
-    num_frames_short = min(30, len(images))
-    success_step_short = success_step if success_step is not None and success_step < num_frames_short else None
-    video_path_short = os.path.join(output_dir, 'trajectory_analysis_first30.mp4')
-    generate_video(images[:num_frames_short], reward_hats[:num_frames_short],
-                   gt_rewards[:num_frames_short], task_progress[:num_frames_short],
-                   video_path_short, env_name, success_step_short, fps=2)
-
-    # Generate pre-success video (Original, 10x slower)
-    if success_step is not None and success_step > 0:
-        print(f"\n=== Generating Pre-Success Video (10x slower, Original) ===")
-        video_path_presuccess = os.path.join(output_dir, 'trajectory_analysis_presuccess.mp4')
-        generate_video(images[:pre_success_end], reward_hats[:pre_success_end],
-                       gt_rewards[:pre_success_end], task_progress[:pre_success_end],
-                       video_path_presuccess, env_name + " (Pre-Success)", success_step, fps=2)
-
-    # Generate full video (Diff form)
-    print(f"\n=== Generating Full Animation Video (Diff) ===")
-    video_path_full_diff = os.path.join(output_dir, 'trajectory_analysis_diff.mp4')
-    success_step_diff = success_step - 1 if success_step is not None and success_step > 0 else None
-    generate_video(images[:-1], reward_hat_diffs, gt_rewards_for_diff, progress_diffs,
-                   video_path_full_diff, env_name + " (DIFF)", success_step_diff,
-                   reward_label="reward_hat_diff", progress_label="Progress Diff")
-
-    # Generate first 30 steps video (10x slower, Diff)
-    print(f"\n=== Generating First 30 Steps Video (10x slower, Diff) ===")
-    num_frames_short_diff = min(30, len(reward_hat_diffs))
-    success_step_short_diff = success_step_diff if success_step_diff is not None and success_step_diff < num_frames_short_diff else None
-    video_path_short_diff = os.path.join(output_dir, 'trajectory_analysis_first30_diff.mp4')
-    generate_video(images[:num_frames_short_diff], reward_hat_diffs[:num_frames_short_diff],
-                   gt_rewards_for_diff[:num_frames_short_diff], progress_diffs[:num_frames_short_diff],
-                   video_path_short_diff, env_name + " (DIFF)", success_step_short_diff, fps=2,
-                   reward_label="reward_hat_diff", progress_label="Progress Diff")
-
-    # Generate pre-success video (Diff form, 10x slower)
-    if success_step is not None and success_step > 1:
-        print(f"\n=== Generating Pre-Success Video (10x slower, Diff) ===")
-        pre_success_end_diff = success_step
-        video_path_presuccess_diff = os.path.join(output_dir, 'trajectory_analysis_presuccess_diff.mp4')
-        generate_video(images[:pre_success_end_diff], reward_hat_diffs[:pre_success_end_diff],
-                       gt_rewards_for_diff[:pre_success_end_diff], progress_diffs[:pre_success_end_diff],
-                       video_path_presuccess_diff, env_name + " (DIFF, Pre-Success)", success_step_diff, fps=2,
-                       reward_label="reward_hat_diff", progress_label="Progress Diff")
-
     # -----------------------------------------------------------------------
-    # Smooth videos: top-right = smooth_reward_hat, bottom-right = smooth diff
+    # Smooth video helper
     # -----------------------------------------------------------------------
     def generate_video_smooth(images_subset, smooth_rhat_subset, smooth_diff_subset,
                               gt_rewards_subset, video_path, vid_env_name, success_step_local, fps=20):
@@ -1049,7 +907,6 @@ def process_env(cfg, args):
 
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
-        # Top-left: Environment image
         ax_img = axes[0, 0]
         im = ax_img.imshow(images_subset[0])
         ax_img.set_title('Environment', fontsize=12)
@@ -1058,7 +915,6 @@ def process_env(cfg, args):
                                 fontsize=12, verticalalignment='top',
                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-        # Top-right: smooth reward_hat
         ax_smooth = axes[0, 1]
         line_smooth, = ax_smooth.plot([], [], 'b-', linewidth=2)
         ax_smooth.set_xlim(0, num_frames)
@@ -1070,7 +926,6 @@ def process_env(cfg, args):
         ax_smooth.grid(True, alpha=0.3)
         dot_smooth, = ax_smooth.plot([], [], 'bo', markersize=6)
 
-        # Bottom-left: GT Reward
         ax_gt = axes[1, 0]
         line_gt, = ax_gt.plot([], [], 'r-', linewidth=2)
         ax_gt.set_xlim(0, num_frames)
@@ -1082,9 +937,8 @@ def process_env(cfg, args):
         ax_gt.grid(True, alpha=0.3)
         dot_gt, = ax_gt.plot([], [], 'ro', markersize=6)
 
-        # Bottom-right: smooth diff (padded, first value = 0)
         ax_diff = axes[1, 1]
-        diff_vals = smooth_diff_subset[1:]  # skip leading 0 for axis range
+        diff_vals = smooth_diff_subset[1:]
         dm = max(0.005, (np.max(np.abs(diff_vals)) if len(diff_vals) > 0 else 0.01) * 1.2)
         ax_diff.set_xlim(0, num_frames)
         ax_diff.set_ylim(-dm, dm)
@@ -1131,88 +985,18 @@ def process_env(cfg, args):
         print(f"Saved video to {video_path}")
         plt.close(fig)
 
-    # Generate full smooth video
-    print(f"\n=== Generating Full Animation Video (Smooth) ===")
-    video_path_smooth = os.path.join(output_dir, 'trajectory_analysis_smooth.mp4')
-    generate_video_smooth(images, smooth_reward_hats, smooth_reward_hat_diffs_padded,
-                          gt_rewards, video_path_smooth, env_name, success_step)
-
-    # Generate first 30 steps smooth video
-    print(f"\n=== Generating First 30 Steps Video (10x slower, Smooth) ===")
-    num_frames_short_smooth = min(30, len(images))
-    success_step_short_smooth = success_step if success_step is not None and success_step < num_frames_short_smooth else None
-    video_path_short_smooth = os.path.join(output_dir, 'trajectory_analysis_first30_smooth.mp4')
-    generate_video_smooth(images[:num_frames_short_smooth],
-                          smooth_reward_hats[:num_frames_short_smooth],
-                          smooth_reward_hat_diffs_padded[:num_frames_short_smooth],
-                          gt_rewards[:num_frames_short_smooth],
-                          video_path_short_smooth, env_name, success_step_short_smooth, fps=2)
-
-    # Generate pre-success smooth video
-    if success_step is not None and success_step > 0:
-        print(f"\n=== Generating Pre-Success Video (10x slower, Smooth) ===")
-        video_path_presuccess_smooth = os.path.join(output_dir, 'trajectory_analysis_presuccess_smooth.mp4')
-        generate_video_smooth(images[:pre_success_end],
-                              smooth_reward_hats[:pre_success_end],
-                              smooth_reward_hat_diffs_padded[:pre_success_end],
-                              gt_rewards[:pre_success_end],
-                              video_path_presuccess_smooth, env_name + " (Pre-Success)",
-                              success_step, fps=2)
-
     # -----------------------------------------------------------------------
-    # Mirror smooth videos
+    # Simple video helper (raw reward_hat + GT reward + reward_hat diff)
     # -----------------------------------------------------------------------
-    # Generate full mirror smooth video
-    print(f"\n=== Generating Full Animation Video (Mirror Smooth) ===")
-    video_path_msmooth = os.path.join(output_dir, 'trajectory_analysis_mirror_smooth.mp4')
-    generate_video_smooth(images, mirror_smooth_reward_hats, mirror_smooth_reward_hat_diffs_padded,
-                          gt_rewards, video_path_msmooth, env_name, success_step)
-
-    # Generate first 30 steps mirror smooth video
-    print(f"\n=== Generating First 30 Steps Video (10x slower, Mirror Smooth) ===")
-    num_frames_short_msmooth = min(30, len(images))
-    success_step_short_msmooth = success_step if success_step is not None and success_step < num_frames_short_msmooth else None
-    video_path_short_msmooth = os.path.join(output_dir, 'trajectory_analysis_first30_mirror_smooth.mp4')
-    generate_video_smooth(images[:num_frames_short_msmooth],
-                          mirror_smooth_reward_hats[:num_frames_short_msmooth],
-                          mirror_smooth_reward_hat_diffs_padded[:num_frames_short_msmooth],
-                          gt_rewards[:num_frames_short_msmooth],
-                          video_path_short_msmooth, env_name, success_step_short_msmooth, fps=2)
-
-    # Generate pre-success mirror smooth video
-    if success_step is not None and success_step > 0:
-        print(f"\n=== Generating Pre-Success Video (10x slower, Mirror Smooth) ===")
-        video_path_presuccess_msmooth = os.path.join(output_dir, 'trajectory_analysis_presuccess_mirror_smooth.mp4')
-        generate_video_smooth(images[:pre_success_end],
-                              mirror_smooth_reward_hats[:pre_success_end],
-                              mirror_smooth_reward_hat_diffs_padded[:pre_success_end],
-                              gt_rewards[:pre_success_end],
-                              video_path_presuccess_msmooth, env_name + " (Pre-Success)",
-                              success_step, fps=2)
-
-    # Generate pre-success global smooth video (smooth computed ONLY over pre-success steps)
-    if success_step is not None and success_step > 0 and presuccess_global_smooth_rhat is not None:
-        print(f"\n=== Generating Pre-Success Global Smooth Video (sw={sw_global}, fps=2) ===")
-        video_path_presuccess_pgsmooth = os.path.join(output_dir, 'trajectory_analysis_presuccess_global_smooth.mp4')
-        generate_video_smooth(images[:pre_success_end],
-                              presuccess_global_smooth_rhat,
-                              presuccess_global_smooth_diff_padded,
-                              gt_rewards[:pre_success_end],
-                              video_path_presuccess_pgsmooth,
-                              env_name + f" (Pre-Success Global Smooth sw={sw_global})",
-                              success_step, fps=2)
-
-    # --- Simple video: image + raw reward_hat + GT reward + reward_hat diff ---
     def generate_video_simple(images_subset, reward_hats_subset, gt_rewards_subset,
                               video_path, vid_env_name, success_step_local, fps=20):
         """Video with 4 panels: image, raw reward_hat, GT reward, reward_hat diff."""
         num_frames = len(images_subset)
         rhat_diffs = np.diff(reward_hats_subset)
-        rhat_diffs_padded = np.concatenate([[0.0], rhat_diffs])  # pad first frame with 0
+        rhat_diffs_padded = np.concatenate([[0.0], rhat_diffs])
 
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
-        # Top-left: Environment image
         ax_img = axes[0, 0]
         im = ax_img.imshow(images_subset[0])
         ax_img.set_title('Environment', fontsize=12)
@@ -1221,7 +1005,6 @@ def process_env(cfg, args):
                                 fontsize=12, verticalalignment='top',
                                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-        # Top-right: reward_hat (raw values)
         ax_rhat = axes[0, 1]
         line_rhat, = ax_rhat.plot([], [], 'b-', linewidth=2)
         ax_rhat.set_xlim(0, num_frames)
@@ -1233,7 +1016,6 @@ def process_env(cfg, args):
         ax_rhat.grid(True, alpha=0.3)
         dot_rhat, = ax_rhat.plot([], [], 'bo', markersize=6)
 
-        # Bottom-left: GT Reward
         ax_gt = axes[1, 0]
         line_gt, = ax_gt.plot([], [], 'r-', linewidth=2)
         ax_gt.set_xlim(0, num_frames)
@@ -1245,7 +1027,6 @@ def process_env(cfg, args):
         ax_gt.grid(True, alpha=0.3)
         dot_gt, = ax_gt.plot([], [], 'ro', markersize=6)
 
-        # Bottom-right: reward_hat diff
         ax_diff = axes[1, 1]
         line_diff, = ax_diff.plot([], [], 'm-', linewidth=2)
         ax_diff.set_xlim(0, num_frames)
@@ -1273,20 +1054,15 @@ def process_env(cfg, args):
 
         def animate(frame):
             im.set_array(images_subset[frame])
-
             status = "SUCCESS!" if success_step_local is not None and frame >= success_step_local else ""
             step_text.set_text(f'Step: {frame}/{num_frames-1} {status}')
-
             x_data = np.arange(frame + 1)
-
             line_rhat.set_data(x_data, reward_hats_subset[:frame + 1])
             line_gt.set_data(x_data, gt_rewards_subset[:frame + 1])
             line_diff.set_data(x_data, rhat_diffs_padded[:frame + 1])
-
             dot_rhat.set_data([frame], [reward_hats_subset[frame]])
             dot_gt.set_data([frame], [gt_rewards_subset[frame]])
             dot_diff.set_data([frame], [rhat_diffs_padded[frame]])
-
             return line_rhat, line_gt, line_diff, dot_rhat, dot_gt, dot_diff, step_text, im
 
         anim = FuncAnimation(fig, animate, init_func=init,
@@ -1296,21 +1072,41 @@ def process_env(cfg, args):
         writer = FFMpegWriter(fps=fps, metadata=dict(artist='RL-VLM-F'), bitrate=2400)
         anim.save(video_path, writer=writer)
         print(f"Saved video to {video_path}")
-
         plt.close(fig)
 
-    # Generate simple video (full)
-    print(f"\n=== Generating Simple Video (raw + diff) ===")
-    video_path_simple = os.path.join(output_dir, 'trajectory_simple.mp4')
-    generate_video_simple(images, reward_hats, gt_rewards,
-                          video_path_simple, env_name, success_step)
+    # -----------------------------------------------------------------------
+    # Generate 4 videos: presuccess + default_steps, each simple + smooth
+    # -----------------------------------------------------------------------
+    n_default = min(default_steps, len(images))
+    ss_default = success_step if success_step is not None and success_step < n_default else None
 
-    # Generate simple video (first 30 steps, slower)
-    first_n_simple = min(30, len(images))
-    ss_simple = success_step if success_step is not None and success_step < first_n_simple else None
-    video_path_simple_short = os.path.join(output_dir, 'trajectory_simple_first30.mp4')
-    generate_video_simple(images[:first_n_simple], reward_hats[:first_n_simple], gt_rewards[:first_n_simple],
-                          video_path_simple_short, env_name + " (First 30 Steps)", ss_simple, fps=2)
+    # 1. Default steps - simple (raw + diff)
+    print(f"\n=== Generating Default Steps ({default_steps}) Video (Simple) ===")
+    video_path_default_simple = os.path.join(output_dir, f'trajectory_default{default_steps}_simple.mp4')
+    generate_video_simple(images[:n_default], reward_hats[:n_default], gt_rewards[:n_default],
+                          video_path_default_simple, env_name + f" (Steps 0-{n_default-1})", ss_default, fps=2)
+
+    # 2. Default steps - smooth
+    print(f"\n=== Generating Default Steps ({default_steps}) Video (Smooth) ===")
+    video_path_default_smooth = os.path.join(output_dir, f'trajectory_default{default_steps}_smooth.mp4')
+    generate_video_smooth(images[:n_default], smooth_reward_hats[:n_default],
+                          smooth_reward_hat_diffs_padded[:n_default], gt_rewards[:n_default],
+                          video_path_default_smooth, env_name + f" (Steps 0-{n_default-1}, Smooth)", ss_default, fps=2)
+
+    # 3. Pre-success - simple (raw + diff)
+    if success_step is not None and success_step > 0:
+        print(f"\n=== Generating Pre-Success Video (Simple) ===")
+        video_path_presuccess_simple = os.path.join(output_dir, 'trajectory_presuccess_simple.mp4')
+        generate_video_simple(images[:pre_success_end], reward_hats[:pre_success_end], gt_rewards[:pre_success_end],
+                              video_path_presuccess_simple, env_name + " (Pre-Success)", success_step, fps=2)
+
+    # 4. Pre-success - smooth
+    if success_step is not None and success_step > 0:
+        print(f"\n=== Generating Pre-Success Video (Smooth) ===")
+        video_path_presuccess_smooth = os.path.join(output_dir, 'trajectory_presuccess_smooth.mp4')
+        generate_video_smooth(images[:pre_success_end], smooth_reward_hats[:pre_success_end],
+                              smooth_reward_hat_diffs_padded[:pre_success_end], gt_rewards[:pre_success_end],
+                              video_path_presuccess_smooth, env_name + " (Pre-Success, Smooth)", success_step, fps=2)
 
     print(f"\n=== Done processing {env_name} ===\n")
     return reward_hats, reward_hat_diffs, gt_rewards, task_progress, progress_diffs
