@@ -24,6 +24,7 @@ from scipy.signal import savgol_filter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from progress_diff_utils import compute_progress_diff_rewards, get_progress_diff_reward_scale
 from reward_model import gen_image_net
 from agent.actor import DiagGaussianActor
 from gym.wrappers.time_limit import TimeLimit
@@ -191,11 +192,22 @@ def main():
     parser.add_argument('--output_dir', type=str, default='expert_trajectory_output')
     parser.add_argument('--smooth_window', type=int, default=21,
                         help='Window length for Savitzky-Golay smoothing (must be odd, >= 3)')
+    parser.add_argument('--progress_diff_discount', type=float, default=1.0,
+                        help='Discount factor used in diff reward: gamma * P(s_{t+1}) - P(s_t)')
+    parser.add_argument('--progress_diff_reward_scale', type=float, default=1.0,
+                        help='Base multiplier applied to diff rewards before optional 1 / (1 - gamma) scaling')
+    parser.add_argument('--progress_diff_scale_by_inv_one_minus_gamma', action='store_true',
+                        help='Multiply diff rewards by 1 / (1 - progress_diff_discount)')
 
     args = parser.parse_args()
 
     actor_step = args.actor_step if args.actor_step is not None else args.step
     reward_model_dir = args.reward_model_dir if args.reward_model_dir else args.model_dir
+    progress_diff_effective_reward_scale, progress_diff_inv_one_minus_gamma_scale = get_progress_diff_reward_scale(
+        reward_scale=args.progress_diff_reward_scale,
+        discount=args.progress_diff_discount,
+        scale_by_inv_one_minus_gamma=args.progress_diff_scale_by_inv_one_minus_gamma,
+    )
 
     print(f"\n{'='*50}")
     print(f"Configuration:")
@@ -204,6 +216,10 @@ def main():
     print(f"  Reward model dir:   {reward_model_dir}")
     print(f"  Reward model step:  {args.reward_model_step}")
     print(f"  Environment:        {args.env}")
+    print(f"  Diff gamma:         {args.progress_diff_discount}")
+    print(f"  Diff base scale:    {args.progress_diff_reward_scale}")
+    print(f"  Diff inv(1-gamma):  {progress_diff_inv_one_minus_gamma_scale}")
+    print(f"  Diff eff. scale:    {progress_diff_effective_reward_scale}")
     print(f"{'='*50}")
 
     # Create environment
@@ -246,8 +262,13 @@ def main():
     gt_rewards = np.array(gt_reward_list)
     task_progress = np.array(task_progress_list)
 
-    # Compute diff form: reward_hat_diff[i] = reward_hat[i+1] - reward_hat[i]
-    reward_hat_diffs = np.diff(reward_hats)  # length = len(reward_hats) - 1
+    # Compute diff form used by progress_diff reward.
+    reward_hat_diffs = compute_progress_diff_rewards(
+        reward_hats,
+        discount=args.progress_diff_discount,
+        reward_scale=args.progress_diff_reward_scale,
+        scale_by_inv_one_minus_gamma=args.progress_diff_scale_by_inv_one_minus_gamma,
+    )
     # Align gt_rewards with diffs (use [:-1] to match diff indices)
     gt_rewards_for_diff = gt_rewards[:-1]
     # Compute progress diff for comparison
@@ -261,7 +282,12 @@ def main():
     smooth_reward_hats = savgol_filter(reward_hats, window_length=sw, polyorder=2)
     print(f"Applied Savitzky-Golay smoothing: window={sw}, polyorder=2")
     # Diff of smoothed values (N-1 values), aligned same as reward_hat_diffs
-    smooth_reward_hat_diffs = np.diff(smooth_reward_hats)
+    smooth_reward_hat_diffs = compute_progress_diff_rewards(
+        smooth_reward_hats,
+        discount=args.progress_diff_discount,
+        reward_scale=args.progress_diff_reward_scale,
+        scale_by_inv_one_minus_gamma=args.progress_diff_scale_by_inv_one_minus_gamma,
+    )
     # Padded version (prepend 0) for video display: frame t shows smooth_P(t)-smooth_P(t-1)
     smooth_reward_hat_diffs_padded = np.concatenate([[0.0], smooth_reward_hat_diffs])
 
@@ -273,7 +299,12 @@ def main():
         padded_rh = reward_hats.copy()
     mirror_smooth_reward_hats = savgol_filter(padded_rh, window_length=sw, polyorder=2)[half_w: half_w + len(reward_hats)]
     print(f"Applied mirror-padded Savitzky-Golay smoothing: window={sw}, half_w={half_w}, polyorder=2")
-    mirror_smooth_reward_hat_diffs = np.diff(mirror_smooth_reward_hats)
+    mirror_smooth_reward_hat_diffs = compute_progress_diff_rewards(
+        mirror_smooth_reward_hats,
+        discount=args.progress_diff_discount,
+        reward_scale=args.progress_diff_reward_scale,
+        scale_by_inv_one_minus_gamma=args.progress_diff_scale_by_inv_one_minus_gamma,
+    )
     mirror_smooth_reward_hat_diffs_padded = np.concatenate([[0.0], mirror_smooth_reward_hat_diffs])
 
     # Statistics
@@ -511,7 +542,12 @@ def main():
                 sw_global -= 1
             sw_global = max(3, sw_global)
             presuccess_global_smooth_rhat = savgol_filter(reward_hats_pre, window_length=sw_global, polyorder=2)
-            presuccess_global_smooth_diff = np.diff(presuccess_global_smooth_rhat)
+            presuccess_global_smooth_diff = compute_progress_diff_rewards(
+                presuccess_global_smooth_rhat,
+                discount=args.progress_diff_discount,
+                reward_scale=args.progress_diff_reward_scale,
+                scale_by_inv_one_minus_gamma=args.progress_diff_scale_by_inv_one_minus_gamma,
+            )
             presuccess_global_smooth_diff_padded = np.concatenate([[0.0], presuccess_global_smooth_diff])
 
             print(f"\n=== Correlation Analysis: PRE-SUCCESS GLOBAL SMOOTH (Pre-Success, steps 0-{success_step}, n={pre_success_end}, sw={sw_global}) ===")
@@ -543,7 +579,12 @@ def main():
             # Pre-success Cubic Global Smooth (polyorder=3)
             po_cubic = min(3, sw_global - 1)
             presuccess_cubic_smooth_rhat = savgol_filter(reward_hats_pre, window_length=sw_global, polyorder=po_cubic)
-            presuccess_cubic_smooth_diff = np.diff(presuccess_cubic_smooth_rhat)
+            presuccess_cubic_smooth_diff = compute_progress_diff_rewards(
+                presuccess_cubic_smooth_rhat,
+                discount=args.progress_diff_discount,
+                reward_scale=args.progress_diff_reward_scale,
+                scale_by_inv_one_minus_gamma=args.progress_diff_scale_by_inv_one_minus_gamma,
+            )
             presuccess_cubic_smooth_diff_padded = np.concatenate([[0.0], presuccess_cubic_smooth_diff])
 
             print(f"\n=== Correlation Analysis: PRE-SUCCESS CUBIC SMOOTH (polyorder={po_cubic}, sw={sw_global}, n={pre_success_end}) ===")
@@ -663,7 +704,11 @@ def main():
             f.write(f"  Spearman: {spearman_prog_pre:.6f}\n\n")
 
         f.write(f"\n{'='*60}\n")
-        f.write(f"DIFF reward_hat_diff = model(s') - model(s)\n")
+        f.write(f"DIFF reward_hat_diff = (gamma * model(s') - model(s)) * effective_reward_scale\n")
+        f.write(f"gamma={args.progress_diff_discount}, base_reward_scale={args.progress_diff_reward_scale}, "
+                f"scale_by_inv_one_minus_gamma={args.progress_diff_scale_by_inv_one_minus_gamma}, "
+                f"inv_one_minus_gamma_scale={progress_diff_inv_one_minus_gamma_scale}, "
+                f"effective_reward_scale={progress_diff_effective_reward_scale}\n")
         f.write(f"{'='*60}\n\n")
 
         f.write(f"=== All Steps (n={len(reward_hat_diffs)}) ===\n")
@@ -693,7 +738,7 @@ def main():
 
         f.write(f"\n\n{'='*60}\n")
         f.write(f"SMOOTH reward_hat = savgol(model(s), window={sw})\n")
-        f.write(f"SMOOTH DIFF       = diff(smooth_reward_hat)\n")
+        f.write(f"SMOOTH DIFF       = (gamma * smooth_reward_hat[t+1] - smooth_reward_hat[t]) * effective_reward_scale\n")
         f.write(f"{'='*60}\n\n")
 
         f.write(f"=== All Steps (n={len(smooth_reward_hats)}) ===\n")
@@ -741,7 +786,7 @@ def main():
 
         f.write(f"\n\n{'='*60}\n")
         f.write(f"MIRROR SMOOTH reward_hat = savgol(mirror_pad(model(s)), window={sw})\n")
-        f.write(f"MIRROR SMOOTH DIFF       = diff(mirror_smooth_reward_hat)\n")
+        f.write(f"MIRROR SMOOTH DIFF       = (gamma * mirror_smooth_reward_hat[t+1] - mirror_smooth_reward_hat[t]) * effective_reward_scale\n")
         f.write(f"(mirror padding: reflect half_w={half_w} frames at each end before smoothing)\n")
         f.write(f"{'='*60}\n\n")
 
@@ -792,7 +837,7 @@ def main():
             f.write(f"\n\n{'='*60}\n")
             f.write(f"PRE-SUCCESS GLOBAL SMOOTH reward_hat = savgol(model(s)[:presuccess], window={sw_global})\n")
             f.write(f"(smoothing applied ONLY over pre-success steps 0-{success_step}, n={pre_success_end})\n")
-            f.write(f"PRE-SUCCESS GLOBAL SMOOTH DIFF = diff(presuccess_global_smooth_rhat)\n")
+            f.write(f"PRE-SUCCESS GLOBAL SMOOTH DIFF = (gamma * presuccess_global_smooth_rhat[t+1] - presuccess_global_smooth_rhat[t]) * effective_reward_scale\n")
             f.write(f"{'='*60}\n\n")
             f.write(f"=== Pre-Success (steps 0-{success_step}, n={pre_success_end}, sw={sw_global}) ===\n")
             f.write(f"presuccess_global_smooth_rhat vs GT Reward:\n")
@@ -815,7 +860,7 @@ def main():
             f.write(f"\n\n{'='*60}\n")
             f.write(f"PRE-SUCCESS CUBIC SMOOTH reward_hat = savgol(model(s)[:presuccess], window={sw_global}, polyorder={po_cubic})\n")
             f.write(f"(smoothing applied ONLY over pre-success steps 0-{success_step}, n={pre_success_end})\n")
-            f.write(f"PRE-SUCCESS CUBIC SMOOTH DIFF = diff(presuccess_cubic_smooth_rhat)\n")
+            f.write(f"PRE-SUCCESS CUBIC SMOOTH DIFF = (gamma * presuccess_cubic_smooth_rhat[t+1] - presuccess_cubic_smooth_rhat[t]) * effective_reward_scale\n")
             f.write(f"{'='*60}\n\n")
             f.write(f"=== Pre-Success (steps 0-{success_step}, n={pre_success_end}, sw={sw_global}, polyorder={po_cubic}) ===\n")
             f.write(f"presuccess_cubic_smooth_rhat vs GT Reward:\n")

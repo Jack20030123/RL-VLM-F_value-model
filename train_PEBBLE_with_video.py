@@ -136,6 +136,17 @@ class Workspace(object):
             smooth_window = int(getattr(cfg, "smooth_window", 21))
             self.progress_diff_reward_scale = float(getattr(cfg, "progress_diff_reward_scale", 1.0))
             self.progress_diff_discount = float(getattr(cfg, "progress_diff_discount", 1.0))
+            self.progress_diff_scale_by_inv_one_minus_gamma = bool(
+                getattr(cfg, "progress_diff_scale_by_inv_one_minus_gamma", False)
+            )
+            (
+                self.progress_diff_effective_reward_scale,
+                self.progress_diff_inv_one_minus_gamma_scale,
+            ) = utils.get_progress_diff_reward_scale(
+                reward_scale=self.progress_diff_reward_scale,
+                discount=self.progress_diff_discount,
+                scale_by_inv_one_minus_gamma=self.progress_diff_scale_by_inv_one_minus_gamma,
+            )
             self.replay_buffer = ProgressDiffReplayBuffer(
                 self.env.observation_space.shape,
                 self.env.action_space.shape,
@@ -145,8 +156,19 @@ class Workspace(object):
                 smooth_window=smooth_window,
                 smooth_relabel=use_smooth_relabel,
                 reward_scale=self.progress_diff_reward_scale,
-                discount=self.progress_diff_discount)
-            print(f"[ProgressDiff] Using ProgressDiffReplayBuffer with capacity={cap}, smooth_window={smooth_window}, smooth_relabel={use_smooth_relabel}, reward_scale={self.progress_diff_reward_scale}, discount={self.progress_diff_discount}")
+                discount=self.progress_diff_discount,
+                scale_by_inv_one_minus_gamma=self.progress_diff_scale_by_inv_one_minus_gamma)
+            print(
+                "[ProgressDiff] Using ProgressDiffReplayBuffer with "
+                f"capacity={cap}, smooth_window={smooth_window}, "
+                f"smooth_relabel={use_smooth_relabel}, "
+                f"reward_scale={self.progress_diff_reward_scale}, "
+                f"discount={self.progress_diff_discount}, "
+                f"scale_by_inv_one_minus_gamma="
+                f"{self.progress_diff_scale_by_inv_one_minus_gamma}, "
+                f"inv_one_minus_gamma_scale={self.progress_diff_inv_one_minus_gamma_scale}, "
+                f"effective_reward_scale={self.progress_diff_effective_reward_scale}"
+            )
         else:
             # baseline mode: use original ReplayBuffer
             use_smooth_relabel = bool(getattr(cfg, "use_smooth_relabel", False))
@@ -370,7 +392,7 @@ class Workspace(object):
                 # ===================== reward_hat computation for eval =====================
                 if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                     if self.use_progress_diff_reward and self.cfg.image_reward:
-                        # Online raw diff: P(s'_{t+1}) - P(s'_t), no EMA/normalization
+                        # Online raw diff with optional 1 / (1 - gamma) scaling.
                         if rgb_image is None or curr_state_rgb is None:
                             reward_hat = 0.0
                         else:
@@ -383,7 +405,9 @@ class Workspace(object):
                             self.reward_model.eval()
                             p_curr = float(self.reward_model.r_hat(curr_img))
                             p_next = float(self.reward_model.r_hat(next_img))
-                            reward_hat = (self.progress_diff_discount * p_next - p_curr) * self.progress_diff_reward_scale
+                            reward_hat = (
+                                self.progress_diff_discount * p_next - p_curr
+                            ) * self.progress_diff_effective_reward_scale
                             self.reward_model.train()
                         curr_state_rgb = rgb_image
                     elif not self.cfg.image_reward:
@@ -590,8 +614,12 @@ class Workspace(object):
 
         # Step-based video window state
         video_step_interval = int(getattr(self.cfg, 'video_step_interval', 10000))
+        video_step_offset = getattr(self.cfg, 'video_step_offset', None)
+        if video_step_offset is None:
+            next_video_checkpoint = video_step_interval
+        else:
+            next_video_checkpoint = int(video_step_offset)
         video_window_episodes = int(getattr(self.cfg, 'video_window_episodes', 5))
-        next_video_checkpoint = video_step_interval
         video_window_remaining = 0
 
         # Previous frame buffer for progress-difference online reward
@@ -962,7 +990,7 @@ class Workspace(object):
             _curr_img_for_buf = None  # will hold s_t for buffer image (progress_diff only)
             if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                 if self.use_progress_diff_reward and self.cfg.image_reward:
-                    # Online raw diff: P(s'_{t+1}) - P(s'_t), no EMA/normalization
+                    # Online raw diff with optional 1 / (1 - gamma) scaling.
                     if rgb_image is None or curr_state_rgb is None:
                         reward_hat = 0.0
                     else:
@@ -975,7 +1003,9 @@ class Workspace(object):
                         self.reward_model.eval()
                         p_curr = float(self.reward_model.r_hat(curr_img))
                         p_next = float(self.reward_model.r_hat(next_img))
-                        reward_hat = (self.progress_diff_discount * p_next - p_curr) * self.progress_diff_reward_scale
+                        reward_hat = (
+                            self.progress_diff_discount * p_next - p_curr
+                        ) * self.progress_diff_effective_reward_scale
                         self.reward_model.train()
                     # Capture s_t BEFORE overwriting curr_state_rgb with s_{t+1}
                     _curr_img_for_buf = curr_state_rgb[::self.resize_factor, ::self.resize_factor, :] if curr_state_rgb is not None else None
@@ -1129,11 +1159,13 @@ class Workspace(object):
                 self.agent.save(model_save_dir, self.step)
                 self.reward_model.save(model_save_dir, self.step)
 
-        # ── Episode-mode: finalize the last episode ────────────────────────────
-        # The while loop exits (episode == _num_train_ep) BEFORE the last done-block
-        # runs, so the final episode's video save and eval are skipped. Fix that here.
-        if _use_episode:
-            # 1. Save video for the final episode (frames were recorded but end_episode() was never called)
+        # ── Finalize any in-progress recorded episode ──────────────────────────
+        # The while loop can exit before the next done-block runs:
+        #   - episode mode: after the last scheduled episode
+        #   - step mode: after hitting num_train_steps mid-episode
+        # In both cases, a currently recorded episode would otherwise never reach
+        # end_episode(), so flush it here.
+        if _use_episode or self.episode_recorder.recording:
             should_save_video = True
             if self.save_env_reward_video_success_only and self.log_success:
                 should_save_video = (episode_success > 0)
@@ -1146,6 +1178,11 @@ class Workspace(object):
                     for f in sim_frames:
                         self.episode_recorder.visualizer.add_frame(f, last_reward)
             self.episode_recorder.end_episode(save_video=should_save_video, save_gif=False)
+
+        # ── Episode-mode: finalize the last episode ────────────────────────────
+        # The while loop exits (episode == _num_train_ep) BEFORE the last done-block
+        # runs, so the final episode's eval/success-window logging are skipped.
+        if _use_episode:
             # 2. Final eval (only if the last episode aligns with eval frequency)
             if _num_train_ep % _eval_ep_freq == 0:
                 self.evaluate(eval_cnt=eval_cnt, episode=_num_train_ep)

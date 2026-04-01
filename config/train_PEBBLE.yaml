@@ -42,6 +42,7 @@ device: cuda
 log_frequency: 10000
 log_save_tb: false
 save_interval: ${num_interact}
+online_log_root_dir: ${oc.env:RLVLMF_ONLINE_LOG_ROOT,./exp}
 
 # video recorder
 save_video: false
@@ -50,6 +51,9 @@ save_env_reward_video_success_only: true
 # Step-based video window: every video_step_interval steps, record the next
 # video_window_episodes consecutive episodes and save the successful ones.
 video_step_interval: 10000
+# Optional first trigger offset for step-based training videos.
+# When null, defaults to video_step_interval (legacy behavior).
+video_step_offset: null
 video_window_episodes: 5
 # Maximum number of training videos to keep on disk
 max_videos_keep: 2000
@@ -117,10 +121,12 @@ num_unsup_episodes: 10
 # Buffer capacity in episodes; auto-computes step cap = N * max_episode_steps.
 # Only used when use_episode=true. Uses image_replay_capacity if 0.
 image_replay_capacity_episodes: 400
-# progress_diff_reward_scale: multiply relabeled diff rewards by this factor (1.0 = no scaling)
+# progress_diff_reward_scale: base multiplier for diff rewards before optional 1 / (1 - gamma) scaling
 progress_diff_reward_scale: 1.0
 # progress_diff_discount: discount factor applied to P(s') in diff (γ·P(s') - P(s)), 1.0 = no discount
 progress_diff_discount: 1.0
+# progress_diff_scale_by_inv_one_minus_gamma: when true, multiply diff rewards by 1 / (1 - progress_diff_discount)
+progress_diff_scale_by_inv_one_minus_gamma: false
 
 # exp_name
 exp_name: gemini_template_1
@@ -139,4 +145,4 @@ save_images: false
 hydra:
     name: ${env}
     run:
-        dir: ./exp/${exp_name}/${env}/${now:%Y-%m-%d}-${now:%H-%M-%S}/vlm_${vlm_label}${vlm}_reward${reward}_H${diag_gaussian_actor.params.hidden_dim}_L${diag_gaussian_actor.params.hidden_depth}_lr${agent.params.actor_lr}/teacher_b${teacher_beta}_g${teacher_gamma}_m${teacher_eps_mistake}_s${teacher_eps_skip}_e${teacher_eps_equal}/label_smooth_${label_margin}/schedule_${reward_schedule}/${experiment}_init${num_seed_steps}_unsup${num_unsup_steps}_inter${num_interact}_maxfeed${max_feedback}_seg${segment}_act${activation}_Rlr${reward_lr}_Rbatch${reward_batch}_Rupdate${reward_update}_en${ensemble_size}_sample${feed_type}_large_batch${large_batch}_seed${seed}
+        dir: ${online_log_root_dir}/${exp_name}/${env}/${now:%Y-%m-%d}-${now:%H-%M-%S}/vlm_${vlm_label}${vlm}_reward${reward}_H${diag_gaussian_actor.params.hidden_dim}_L${diag_gaussian_actor.params.hidden_depth}_lr${agent.params.actor_lr}/teacher_b${teacher_beta}_g${teacher_gamma}_m${teacher_eps_mistake}_s${teacher_eps_skip}_e${teacher_eps_equal}/label_smooth_${label_margin}/schedule_${reward_schedule}/${experiment}_init${num_seed_steps}_unsup${num_unsup_steps}_inter${num_interact}_maxfeed${max_feedback}_seg${segment}_act${activation}_Rlr${reward_lr}_Rbatch${reward_batch}_Rupdate${reward_update}_en${ensemble_size}_sample${feed_type}_large_batch${large_batch}_seed${seed}

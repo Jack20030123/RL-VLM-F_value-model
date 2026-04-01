@@ -622,11 +622,24 @@ class RewardModelScore:
             combined_images_list = []
             useful_indices = []
             
-            file_path = os.path.abspath(__file__)
-            dir_path = os.path.dirname(file_path)
-            save_path = "{}/data/gpt_query_image/{}/{}".format(dir_path, self.env_name, time_string)
-            if not os.path.exists(save_path):
-                os.makedirs(save_path)
+            if self.log_dir is not None:
+                save_path = os.path.join(
+                    self.log_dir,
+                    "gpt_query_image",
+                    self.env_name,
+                    time_string,
+                )
+            else:
+                file_path = os.path.abspath(__file__)
+                dir_path = os.path.dirname(file_path)
+                save_path = os.path.join(
+                    dir_path,
+                    "data",
+                    "gpt_query_image",
+                    self.env_name,
+                    time_string,
+                )
+            os.makedirs(save_path, exist_ok=True)
             for idx, (img1, img2) in enumerate(zip(img_t_1, img_t_2)):
                 combined_image = np.concatenate([img1, img2], axis=1)
                 combined_images_list.append(combined_image)
@@ -1049,4 +1062,3 @@ class RewardModelScore:
         ensemble_acc = ensemble_acc / total
         
         return ensemble_acc
-

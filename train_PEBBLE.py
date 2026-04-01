@@ -119,6 +119,17 @@ class Workspace(object):
             smooth_window = int(getattr(cfg, "smooth_window", 21))
             self.progress_diff_reward_scale = float(getattr(cfg, "progress_diff_reward_scale", 1.0))
             self.progress_diff_discount = float(getattr(cfg, "progress_diff_discount", 1.0))
+            self.progress_diff_scale_by_inv_one_minus_gamma = bool(
+                getattr(cfg, "progress_diff_scale_by_inv_one_minus_gamma", False)
+            )
+            (
+                self.progress_diff_effective_reward_scale,
+                self.progress_diff_inv_one_minus_gamma_scale,
+            ) = utils.get_progress_diff_reward_scale(
+                reward_scale=self.progress_diff_reward_scale,
+                discount=self.progress_diff_discount,
+                scale_by_inv_one_minus_gamma=self.progress_diff_scale_by_inv_one_minus_gamma,
+            )
             self.replay_buffer = ProgressDiffReplayBuffer(
                 self.env.observation_space.shape,
                 self.env.action_space.shape,
@@ -128,8 +139,19 @@ class Workspace(object):
                 smooth_window=smooth_window,
                 smooth_relabel=use_smooth_relabel,
                 reward_scale=self.progress_diff_reward_scale,
-                discount=self.progress_diff_discount)
-            print(f"[ProgressDiff] Using ProgressDiffReplayBuffer with capacity={cap}, smooth_window={smooth_window}, smooth_relabel={use_smooth_relabel}, reward_scale={self.progress_diff_reward_scale}, discount={self.progress_diff_discount}")
+                discount=self.progress_diff_discount,
+                scale_by_inv_one_minus_gamma=self.progress_diff_scale_by_inv_one_minus_gamma)
+            print(
+                "[ProgressDiff] Using ProgressDiffReplayBuffer with "
+                f"capacity={cap}, smooth_window={smooth_window}, "
+                f"smooth_relabel={use_smooth_relabel}, "
+                f"reward_scale={self.progress_diff_reward_scale}, "
+                f"discount={self.progress_diff_discount}, "
+                f"scale_by_inv_one_minus_gamma="
+                f"{self.progress_diff_scale_by_inv_one_minus_gamma}, "
+                f"inv_one_minus_gamma_scale={self.progress_diff_inv_one_minus_gamma_scale}, "
+                f"effective_reward_scale={self.progress_diff_effective_reward_scale}"
+            )
         else:
             # baseline mode: use original ReplayBuffer
             use_smooth_relabel = bool(getattr(cfg, "use_smooth_relabel", False))
@@ -308,7 +330,7 @@ class Workspace(object):
                 # ===================== reward_hat computation for eval =====================
                 if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                     if self.use_progress_diff_reward and self.cfg.image_reward:
-                        # Online raw diff: P(s'_{t+1}) - P(s'_t), no EMA/normalization
+                        # Online raw diff with optional 1 / (1 - gamma) scaling.
                         if rgb_image is None or curr_state_rgb is None:
                             reward_hat = 0.0
                         else:
@@ -321,7 +343,9 @@ class Workspace(object):
                             self.reward_model.eval()
                             p_curr = float(self.reward_model.r_hat(curr_img))
                             p_next = float(self.reward_model.r_hat(next_img))
-                            reward_hat = (self.progress_diff_discount * p_next - p_curr) * self.progress_diff_reward_scale
+                            reward_hat = (
+                                self.progress_diff_discount * p_next - p_curr
+                            ) * self.progress_diff_effective_reward_scale
                             self.reward_model.train()
                         curr_state_rgb = rgb_image
                     elif not self.cfg.image_reward:
@@ -858,7 +882,7 @@ class Workspace(object):
             _curr_img_for_buf = None  # will hold s_t for buffer image (progress_diff only)
             if self.reward == 'learn_from_preference' or self.reward == 'learn_from_score':
                 if self.use_progress_diff_reward and self.cfg.image_reward:
-                    # Online raw diff: P(s'_{t+1}) - P(s'_t), no EMA/normalization
+                    # Online raw diff with optional 1 / (1 - gamma) scaling.
                     if rgb_image is None or curr_state_rgb is None:
                         reward_hat = 0.0
                     else:
@@ -871,7 +895,9 @@ class Workspace(object):
                         self.reward_model.eval()
                         p_curr = float(self.reward_model.r_hat(curr_img))
                         p_next = float(self.reward_model.r_hat(next_img))
-                        reward_hat = (self.progress_diff_discount * p_next - p_curr) * self.progress_diff_reward_scale
+                        reward_hat = (
+                            self.progress_diff_discount * p_next - p_curr
+                        ) * self.progress_diff_effective_reward_scale
                         self.reward_model.train()
                     # Capture s_t BEFORE overwriting curr_state_rgb with s_{t+1}
                     _curr_img_for_buf = curr_state_rgb[::self.resize_factor, ::self.resize_factor, :] if curr_state_rgb is not None else None

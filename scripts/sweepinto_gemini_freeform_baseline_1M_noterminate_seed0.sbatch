@@ -1,0 +1,81 @@
+#!/bin/bash
+#SBATCH --account=biyik_1165
+#SBATCH --partition=gpu
+#SBATCH --gpus-per-task=1
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=96G
+#SBATCH --time=48:00:00
+#SBATCH --job-name=sweepinto_baseline_1M_s0
+#SBATCH --output=logs/%x-%j.out
+
+module purge
+module load apptainer
+
+export APPTAINER_CACHEDIR=/scratch1/haobaizh/apptainer
+mkdir -p "$APPTAINER_CACHEDIR"
+
+cd /project2/biyik_1165/RL-VLM-F_value-model
+
+apptainer exec --nv \
+  -B /project2/biyik_1165/RL-VLM-F_value-model:/workspace/RL-VLM-F \
+  rlvlmf_value_model_carc.sif \
+  bash -lc '
+    set -e
+    source /opt/conda/etc/profile.d/conda.sh
+    conda activate rlvlmf
+
+    if [ -f /workspace/RL-VLM-F/.env ]; then
+      set -a
+      source /workspace/RL-VLM-F/.env
+      set +a
+    fi
+
+    export HF_HOME=/workspace/RL-VLM-F/hf_cache
+    export TRANSFORMERS_CACHE=/workspace/RL-VLM-F/hf_cache/transformers
+    export HUGGINGFACE_HUB_CACHE=/workspace/RL-VLM-F/hf_cache/hub
+    export TORCH_HOME=/workspace/RL-VLM-F/torch_cache
+    export TIMM_HOME=/workspace/RL-VLM-F/timm_cache
+    export XDG_CACHE_HOME=/workspace/RL-VLM-F/.cache
+    export RLVLMF_ONLINE_LOG_ROOT=/scratch1/haobaizh/rlvlmf_online_logs
+    mkdir -p "$HF_HOME" "$TRANSFORMERS_CACHE" "$HUGGINGFACE_HUB_CACHE" \
+             "$TORCH_HOME" "$TIMM_HOME" "$XDG_CACHE_HOME" \
+             "$RLVLMF_ONLINE_LOG_ROOT"
+
+    export PYTHONPATH=/workspace/RL-VLM-F/.pydeps:/workspace/RL-VLM-F/softgym:/workspace/RL-VLM-F/softgym/PyFlex/bindings:/workspace/RL-VLM-F/softgym/PyFlex/bindings/build:/workspace/RL-VLM-F:${PYTHONPATH}
+
+    cd /workspace/RL-VLM-F
+
+    python train_PEBBLE_with_video.py \
+      env=metaworld_sweep-into-v2 \
+      reward=learn_from_preference \
+      vlm_label=1 vlm=gemini_free_form \
+      image_reward=1 segment=1 \
+      teacher_eps_mistake=0 \
+      use_progress_diff_reward=false \
+      use_smooth_relabel=0 \
+      feed_type=0 teacher_beta=-1 teacher_gamma=1 teacher_eps_skip=0 teacher_eps_equal=0 \
+      terminate_on_success=false \
+      use_episode=false \
+      video_record_frequency=1 \
+      video_step_interval=100000 \
+      video_step_offset=99500 \
+      video_window_episodes=1 \
+      save_env_reward_video_success_only=false \
+      max_episode_steps=500 \
+      image_replay_capacity=200000 \
+      num_interact=4000 \
+      reward_batch=40 reward_update=10 \
+      max_feedback=20000 \
+      num_train_steps=1000001 \
+      save_interval=100000 \
+      gradient_update=1 activation=tanh num_unsup_steps=9000 \
+      num_eval_episodes=1 \
+      agent.params.actor_lr=0.0003 agent.params.critic_lr=0.0003 \
+      agent.params.batch_size=512 \
+      double_q_critic.params.hidden_dim=256 double_q_critic.params.hidden_depth=3 \
+      diag_gaussian_actor.params.hidden_dim=256 diag_gaussian_actor.params.hidden_depth=3 \
+      seed=0 \
+      exp_name=baseline_gemini_freeform_1M_noterminate_seed0_sweepinto
+  '

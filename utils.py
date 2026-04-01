@@ -17,6 +17,7 @@ from torch import nn
 from torch import distributions as pyd
 from softgym.registered_env import env_arg_dict, SOFTGYM_ENVS
 from softgym.utils.normalized_env import normalize
+from progress_diff_utils import get_progress_diff_reward_scale
     
 def make_softgym_env(cfg):
     env_name = cfg.env.replace('softgym_','')

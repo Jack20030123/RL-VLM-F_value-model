@@ -30,6 +30,7 @@ from scipy.signal import savgol_filter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from progress_diff_utils import compute_progress_diff_rewards, get_progress_diff_reward_scale
 from reward_model import gen_image_net, gen_image_net2
 from agent.actor import DiagGaussianActor
 from softgym.registered_env import env_arg_dict, SOFTGYM_ENVS
@@ -52,6 +53,9 @@ DEFAULT_CONFIGS = [
         image_height=240,
         image_width=240,
         resize_factor=3,
+        progress_diff_discount=0.99,
+        progress_diff_reward_scale=1.0,
+        progress_diff_scale_by_inv_one_minus_gamma=False,
     ),
     dict(
         env='softgym_PassWater',
@@ -64,6 +68,9 @@ DEFAULT_CONFIGS = [
         image_height=360,
         image_width=360,
         resize_factor=2,
+        progress_diff_discount=0.99,
+        progress_diff_reward_scale=1.0,
+        progress_diff_scale_by_inv_one_minus_gamma=False,
     ),
 ]
 
@@ -218,6 +225,16 @@ def process_env(cfg, args):
     image_width = cfg['image_width']
     resize_factor = cfg['resize_factor']
     default_steps = cfg['default_steps']
+    progress_diff_discount = float(cfg.get('progress_diff_discount', 1.0))
+    progress_diff_reward_scale = float(cfg.get('progress_diff_reward_scale', 1.0))
+    progress_diff_scale_by_inv_one_minus_gamma = bool(
+        cfg.get('progress_diff_scale_by_inv_one_minus_gamma', False)
+    )
+    progress_diff_effective_reward_scale, progress_diff_inv_one_minus_gamma_scale = get_progress_diff_reward_scale(
+        reward_scale=progress_diff_reward_scale,
+        discount=progress_diff_discount,
+        scale_by_inv_one_minus_gamma=progress_diff_scale_by_inv_one_minus_gamma,
+    )
     ensemble_size = args.ensemble_size
     smooth_window = args.smooth_window
     max_steps = args.max_steps
@@ -231,6 +248,10 @@ def process_env(cfg, args):
     print(f"  Reward model step:  {reward_model_step}")
     print(f"  Image size:         {image_height}x{image_width} (resize_factor={resize_factor})")
     print(f"  Output dir:         {output_dir}")
+    print(f"  Diff gamma:         {progress_diff_discount}")
+    print(f"  Diff base scale:    {progress_diff_reward_scale}")
+    print(f"  Diff inv(1-gamma):  {progress_diff_inv_one_minus_gamma_scale}")
+    print(f"  Diff eff. scale:    {progress_diff_effective_reward_scale}")
     print(f"{'='*60}")
 
     # Create environment
@@ -277,8 +298,13 @@ def process_env(cfg, args):
     # Use raw_images for video display
     images = raw_images
 
-    # Compute diff form: reward_hat_diff[i] = 0.99 * reward_hat[i+1] - reward_hat[i]
-    reward_hat_diffs = 0.99 * reward_hats[1:] - reward_hats[:-1]
+    # Compute diff form used by progress_diff reward.
+    reward_hat_diffs = compute_progress_diff_rewards(
+        reward_hats,
+        discount=progress_diff_discount,
+        reward_scale=progress_diff_reward_scale,
+        scale_by_inv_one_minus_gamma=progress_diff_scale_by_inv_one_minus_gamma,
+    )
     # Align gt_rewards with diffs (use [:-1] to match diff indices)
     gt_rewards_for_diff = gt_rewards[:-1]
     # Compute progress diff for comparison
@@ -292,7 +318,12 @@ def process_env(cfg, args):
     smooth_reward_hats = savgol_filter(reward_hats, window_length=sw, polyorder=2)
     print(f"Applied Savitzky-Golay smoothing: window={sw}, polyorder=2")
     # Diff of smoothed values (N-1 values), aligned same as reward_hat_diffs
-    smooth_reward_hat_diffs = 0.99 * smooth_reward_hats[1:] - smooth_reward_hats[:-1]
+    smooth_reward_hat_diffs = compute_progress_diff_rewards(
+        smooth_reward_hats,
+        discount=progress_diff_discount,
+        reward_scale=progress_diff_reward_scale,
+        scale_by_inv_one_minus_gamma=progress_diff_scale_by_inv_one_minus_gamma,
+    )
     # Padded version (prepend 0) for video display: frame t shows smooth_P(t)-smooth_P(t-1)
     smooth_reward_hat_diffs_padded = np.concatenate([[0.0], smooth_reward_hat_diffs])
 
@@ -304,7 +335,12 @@ def process_env(cfg, args):
         padded_rh = reward_hats.copy()
     mirror_smooth_reward_hats = savgol_filter(padded_rh, window_length=sw, polyorder=2)[half_w: half_w + len(reward_hats)]
     print(f"Applied mirror-padded Savitzky-Golay smoothing: window={sw}, half_w={half_w}, polyorder=2")
-    mirror_smooth_reward_hat_diffs = 0.99 * mirror_smooth_reward_hats[1:] - mirror_smooth_reward_hats[:-1]
+    mirror_smooth_reward_hat_diffs = compute_progress_diff_rewards(
+        mirror_smooth_reward_hats,
+        discount=progress_diff_discount,
+        reward_scale=progress_diff_reward_scale,
+        scale_by_inv_one_minus_gamma=progress_diff_scale_by_inv_one_minus_gamma,
+    )
     mirror_smooth_reward_hat_diffs_padded = np.concatenate([[0.0], mirror_smooth_reward_hat_diffs])
 
     # Statistics
@@ -570,7 +606,12 @@ def process_env(cfg, args):
                 sw_global -= 1
             sw_global = max(3, sw_global)
             presuccess_global_smooth_rhat = savgol_filter(reward_hats_pre, window_length=sw_global, polyorder=2)
-            presuccess_global_smooth_diff = 0.99 * presuccess_global_smooth_rhat[1:] - presuccess_global_smooth_rhat[:-1]
+            presuccess_global_smooth_diff = compute_progress_diff_rewards(
+                presuccess_global_smooth_rhat,
+                discount=progress_diff_discount,
+                reward_scale=progress_diff_reward_scale,
+                scale_by_inv_one_minus_gamma=progress_diff_scale_by_inv_one_minus_gamma,
+            )
             presuccess_global_smooth_diff_padded = np.concatenate([[0.0], presuccess_global_smooth_diff])
 
             print(f"\n=== Correlation Analysis: PRE-SUCCESS GLOBAL SMOOTH (Pre-Success, steps 0-{success_step}, n={pre_success_end}, sw={sw_global}) ===")
@@ -602,7 +643,12 @@ def process_env(cfg, args):
             # Pre-success Cubic Global Smooth (polyorder=3)
             po_cubic = min(3, sw_global - 1)
             presuccess_cubic_smooth_rhat = savgol_filter(reward_hats_pre, window_length=sw_global, polyorder=po_cubic)
-            presuccess_cubic_smooth_diff = 0.99 * presuccess_cubic_smooth_rhat[1:] - presuccess_cubic_smooth_rhat[:-1]
+            presuccess_cubic_smooth_diff = compute_progress_diff_rewards(
+                presuccess_cubic_smooth_rhat,
+                discount=progress_diff_discount,
+                reward_scale=progress_diff_reward_scale,
+                scale_by_inv_one_minus_gamma=progress_diff_scale_by_inv_one_minus_gamma,
+            )
             presuccess_cubic_smooth_diff_padded = np.concatenate([[0.0], presuccess_cubic_smooth_diff])
 
             print(f"\n=== Correlation Analysis: PRE-SUCCESS CUBIC SMOOTH (polyorder={po_cubic}, sw={sw_global}, n={pre_success_end}) ===")
@@ -697,7 +743,11 @@ def process_env(cfg, args):
             f.write(f"  Spearman: {spearman_prog_pre:.6f}\n\n")
 
         f.write(f"\n{'='*60}\n")
-        f.write(f"DIFF reward_hat_diff = model(s') - model(s)\n")
+        f.write(f"DIFF reward_hat_diff = (gamma * model(s') - model(s)) * effective_reward_scale\n")
+        f.write(f"gamma={progress_diff_discount}, base_reward_scale={progress_diff_reward_scale}, "
+                f"scale_by_inv_one_minus_gamma={progress_diff_scale_by_inv_one_minus_gamma}, "
+                f"inv_one_minus_gamma_scale={progress_diff_inv_one_minus_gamma_scale}, "
+                f"effective_reward_scale={progress_diff_effective_reward_scale}\n")
         f.write(f"{'='*60}\n\n")
 
         f.write(f"=== All Steps (n={len(reward_hat_diffs)}) ===\n")
@@ -727,7 +777,7 @@ def process_env(cfg, args):
 
         f.write(f"\n\n{'='*60}\n")
         f.write(f"SMOOTH reward_hat = savgol(model(s), window={sw})\n")
-        f.write(f"SMOOTH DIFF       = diff(smooth_reward_hat)\n")
+        f.write(f"SMOOTH DIFF       = (gamma * smooth_reward_hat[t+1] - smooth_reward_hat[t]) * effective_reward_scale\n")
         f.write(f"{'='*60}\n\n")
 
         f.write(f"=== All Steps (n={len(smooth_reward_hats)}) ===\n")
@@ -775,7 +825,7 @@ def process_env(cfg, args):
 
         f.write(f"\n\n{'='*60}\n")
         f.write(f"MIRROR SMOOTH reward_hat = savgol(mirror_pad(model(s)), window={sw})\n")
-        f.write(f"MIRROR SMOOTH DIFF       = diff(mirror_smooth_reward_hat)\n")
+        f.write(f"MIRROR SMOOTH DIFF       = (gamma * mirror_smooth_reward_hat[t+1] - mirror_smooth_reward_hat[t]) * effective_reward_scale\n")
         f.write(f"(mirror padding: reflect half_w={half_w} frames at each end before smoothing)\n")
         f.write(f"{'='*60}\n\n")
 
@@ -826,7 +876,7 @@ def process_env(cfg, args):
             f.write(f"\n\n{'='*60}\n")
             f.write(f"PRE-SUCCESS GLOBAL SMOOTH reward_hat = savgol(model(s)[:presuccess], window={sw_global})\n")
             f.write(f"(smoothing applied ONLY over pre-success steps 0-{success_step}, n={pre_success_end})\n")
-            f.write(f"PRE-SUCCESS GLOBAL SMOOTH DIFF = diff(presuccess_global_smooth_rhat)\n")
+            f.write(f"PRE-SUCCESS GLOBAL SMOOTH DIFF = (gamma * presuccess_global_smooth_rhat[t+1] - presuccess_global_smooth_rhat[t]) * effective_reward_scale\n")
             f.write(f"{'='*60}\n\n")
             f.write(f"=== Pre-Success (steps 0-{success_step}, n={pre_success_end}, sw={sw_global}) ===\n")
             f.write(f"presuccess_global_smooth_rhat vs GT Reward:\n")
@@ -849,7 +899,7 @@ def process_env(cfg, args):
             f.write(f"\n\n{'='*60}\n")
             f.write(f"PRE-SUCCESS CUBIC SMOOTH reward_hat = savgol(model(s)[:presuccess], window={sw_global}, polyorder={po_cubic})\n")
             f.write(f"(smoothing applied ONLY over pre-success steps 0-{success_step}, n={pre_success_end})\n")
-            f.write(f"PRE-SUCCESS CUBIC SMOOTH DIFF = diff(presuccess_cubic_smooth_rhat)\n")
+            f.write(f"PRE-SUCCESS CUBIC SMOOTH DIFF = (gamma * presuccess_cubic_smooth_rhat[t+1] - presuccess_cubic_smooth_rhat[t]) * effective_reward_scale\n")
             f.write(f"{'='*60}\n\n")
             f.write(f"=== Pre-Success (steps 0-{success_step}, n={pre_success_end}, sw={sw_global}, polyorder={po_cubic}) ===\n")
             f.write(f"presuccess_cubic_smooth_rhat vs GT Reward:\n")
@@ -992,7 +1042,12 @@ def process_env(cfg, args):
                               video_path, vid_env_name, success_step_local, fps=20):
         """Video with 4 panels: image, raw reward_hat, GT reward, reward_hat diff."""
         num_frames = len(images_subset)
-        rhat_diffs = 0.99 * reward_hats_subset[1:] - reward_hats_subset[:-1]
+        rhat_diffs = compute_progress_diff_rewards(
+            reward_hats_subset,
+            discount=progress_diff_discount,
+            reward_scale=progress_diff_reward_scale,
+            scale_by_inv_one_minus_gamma=progress_diff_scale_by_inv_one_minus_gamma,
+        )
         rhat_diffs_padded = np.concatenate([[0.0], rhat_diffs])
 
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
@@ -1133,6 +1188,12 @@ def main():
     parser.add_argument('--max_steps', type=int, default=200)
     parser.add_argument('--smooth_window', type=int, default=21,
                         help='Window length for Savitzky-Golay smoothing (must be odd, >= 3)')
+    parser.add_argument('--progress_diff_discounts', type=float, nargs='+', default=None,
+                        help='Diff gamma values, one per env')
+    parser.add_argument('--progress_diff_reward_scales', type=float, nargs='+', default=None,
+                        help='Base diff reward scales, one per env')
+    parser.add_argument('--progress_diff_scale_by_inv_one_minus_gamma', action='store_true',
+                        help='Multiply diff rewards by 1 / (1 - progress_diff_discount) for all selected envs')
 
     args = parser.parse_args()
 
@@ -1150,21 +1211,28 @@ def main():
             if default is None:
                 raise ValueError(f"Unknown env {env_name}. Supported: softgym_RopeFlattenEasy, softgym_PassWater")
 
-            cfg = dict(default)
-            if args.actor_model_dirs:
-                cfg['actor_model_dir'] = args.actor_model_dirs[i] if i < len(args.actor_model_dirs) else args.actor_model_dirs[-1]
-            if args.actor_steps:
-                cfg['actor_step'] = args.actor_steps[i] if i < len(args.actor_steps) else args.actor_steps[-1]
-            if args.reward_model_dirs:
-                cfg['reward_model_dir'] = args.reward_model_dirs[i] if i < len(args.reward_model_dirs) else args.reward_model_dirs[-1]
-            if args.reward_model_steps:
-                cfg['reward_model_step'] = args.reward_model_steps[i] if i < len(args.reward_model_steps) else args.reward_model_steps[-1]
-            if args.output_dirs:
-                cfg['output_dir'] = args.output_dirs[i] if i < len(args.output_dirs) else args.output_dirs[-1]
-            configs.append(cfg)
+            configs.append(dict(default))
         configs_to_run = configs
     else:
-        configs_to_run = DEFAULT_CONFIGS
+        configs_to_run = [dict(cfg) for cfg in DEFAULT_CONFIGS]
+
+    for i, cfg in enumerate(configs_to_run):
+        if args.actor_model_dirs:
+            cfg['actor_model_dir'] = args.actor_model_dirs[i] if i < len(args.actor_model_dirs) else args.actor_model_dirs[-1]
+        if args.actor_steps:
+            cfg['actor_step'] = args.actor_steps[i] if i < len(args.actor_steps) else args.actor_steps[-1]
+        if args.reward_model_dirs:
+            cfg['reward_model_dir'] = args.reward_model_dirs[i] if i < len(args.reward_model_dirs) else args.reward_model_dirs[-1]
+        if args.reward_model_steps:
+            cfg['reward_model_step'] = args.reward_model_steps[i] if i < len(args.reward_model_steps) else args.reward_model_steps[-1]
+        if args.output_dirs:
+            cfg['output_dir'] = args.output_dirs[i] if i < len(args.output_dirs) else args.output_dirs[-1]
+        if args.progress_diff_discounts:
+            cfg['progress_diff_discount'] = args.progress_diff_discounts[i] if i < len(args.progress_diff_discounts) else args.progress_diff_discounts[-1]
+        if args.progress_diff_reward_scales:
+            cfg['progress_diff_reward_scale'] = args.progress_diff_reward_scales[i] if i < len(args.progress_diff_reward_scales) else args.progress_diff_reward_scales[-1]
+        if args.progress_diff_scale_by_inv_one_minus_gamma:
+            cfg['progress_diff_scale_by_inv_one_minus_gamma'] = True
 
     print(f"Will process {len(configs_to_run)} environment(s)")
     for cfg in configs_to_run:

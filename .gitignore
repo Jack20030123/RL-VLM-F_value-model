@@ -50,6 +50,9 @@ test_scripts/*
 figures
 figure/
 data/
+models/
+models_gt/
+expert_trajectory_output/
 
 
 softgym/PyFlex/bindings/build

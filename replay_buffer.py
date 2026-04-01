@@ -203,14 +203,19 @@ class ProgressDiffReplayBuffer(object):
     """
 
     def __init__(self, obs_shape, action_shape, capacity, device, window=1,
-                 image_size=300, smooth_window=21, smooth_relabel=True, reward_scale=1.0, discount=1.0):
+                 image_size=300, smooth_window=21, smooth_relabel=True, reward_scale=1.0,
+                 discount=1.0, scale_by_inv_one_minus_gamma=False):
         self.capacity = capacity
         self.device = device
         self.image_size = image_size
         self.smooth_window = smooth_window
         self.smooth_relabel = smooth_relabel
-        self.reward_scale = reward_scale
         self.discount = discount
+        self.reward_scale, self.inv_one_minus_gamma_scale = utils.get_progress_diff_reward_scale(
+            reward_scale=reward_scale,
+            discount=discount,
+            scale_by_inv_one_minus_gamma=scale_by_inv_one_minus_gamma,
+        )
 
         obs_dtype = np.float32 if len(obs_shape) == 1 else np.uint8
         self.obses = np.empty((capacity, *obs_shape), dtype=obs_dtype)
