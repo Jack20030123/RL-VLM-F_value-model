@@ -4,7 +4,7 @@
 #SBATCH --gpus-per-task=1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=96G
 #SBATCH --time=48:00:00
 #SBATCH --job-name=sweepinto_pd099sis_1M_s0
