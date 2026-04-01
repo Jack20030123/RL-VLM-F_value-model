@@ -13,13 +13,15 @@
 module purge
 module load apptainer
 
-export APPTAINER_CACHEDIR=/scratch1/haobaizh/apptainer
-mkdir -p "$APPTAINER_CACHEDIR"
+export RLVLMF_STORAGE_ROOT=/scratch1/haobaizh
+mkdir -p "$RLVLMF_STORAGE_ROOT/apptainer" "$RLVLMF_STORAGE_ROOT/rlvlmf_online_logs"
+export APPTAINER_CACHEDIR="$RLVLMF_STORAGE_ROOT/apptainer"
 
 cd /project2/biyik_1165/RL-VLM-F_value-model
 
 apptainer exec --nv \
   -B /project2/biyik_1165/RL-VLM-F_value-model:/workspace/RL-VLM-F \
+  -B "$RLVLMF_STORAGE_ROOT":"$RLVLMF_STORAGE_ROOT" \
   rlvlmf_value_model_carc.sif \
   bash -lc '
     set -e
@@ -38,7 +40,7 @@ apptainer exec --nv \
     export TORCH_HOME=/workspace/RL-VLM-F/torch_cache
     export TIMM_HOME=/workspace/RL-VLM-F/timm_cache
     export XDG_CACHE_HOME=/workspace/RL-VLM-F/.cache
-    export RLVLMF_ONLINE_LOG_ROOT=/scratch1/haobaizh/rlvlmf_online_logs
+    export RLVLMF_ONLINE_LOG_ROOT="${RLVLMF_STORAGE_ROOT}/rlvlmf_online_logs"
     mkdir -p "$HF_HOME" "$TRANSFORMERS_CACHE" "$HUGGINGFACE_HUB_CACHE" \
              "$TORCH_HOME" "$TIMM_HOME" "$XDG_CACHE_HOME" \
              "$RLVLMF_ONLINE_LOG_ROOT"
