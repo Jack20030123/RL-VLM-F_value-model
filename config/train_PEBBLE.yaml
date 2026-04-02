@@ -42,7 +42,7 @@ device: cuda
 log_frequency: 10000
 log_save_tb: false
 save_interval: ${num_interact}
-online_log_root_dir: ${oc.env:RLVLMF_ONLINE_LOG_ROOT,./exp}
+online_log_root_dir: ${env:RLVLMF_ONLINE_LOG_ROOT,./exp}
 
 # video recorder
 save_video: false
