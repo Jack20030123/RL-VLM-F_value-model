@@ -50,6 +50,7 @@ apptainer exec --nv \
     cd /workspace/RL-VLM-F
 
     python train_PEBBLE_with_video.py \
+      online_log_root_dir=/scratch1/haobaizh/rlvlmf_online_logs \
       env=metaworld_sweep-into-v2 \
       reward=learn_from_preference \
       vlm_label=1 vlm=gemini_free_form \
