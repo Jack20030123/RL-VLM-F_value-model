@@ -17,6 +17,7 @@ Usage:
 """
 
 import argparse
+import importlib.metadata as importlib_metadata
 import os
 import sys
 import numpy as np
@@ -29,6 +30,21 @@ from scipy.stats import pearsonr, spearmanr
 from scipy.signal import savgol_filter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+if not hasattr(importlib_metadata, "packages_distributions"):
+    try:
+        import importlib_metadata as backport_importlib_metadata
+    except ImportError:
+        backport_importlib_metadata = None
+
+    if backport_importlib_metadata and hasattr(
+        backport_importlib_metadata, "packages_distributions"
+    ):
+        importlib_metadata.packages_distributions = (
+            backport_importlib_metadata.packages_distributions
+        )
+    else:
+        importlib_metadata.packages_distributions = lambda: {}
 
 from progress_diff_utils import compute_progress_diff_rewards, get_progress_diff_reward_scale
 from reward_model import gen_image_net, gen_image_net2

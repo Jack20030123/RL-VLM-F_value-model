@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=0
+#SBATCH --mem=32G
 #SBATCH --time=04:00:00
 #SBATCH --job-name=score_expert_trajectory
 #SBATCH --output=logs/%x-%j.out

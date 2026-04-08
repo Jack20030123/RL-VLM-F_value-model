@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import importlib.metadata as importlib_metadata
 import os
 import sys
 import numpy as np
@@ -23,6 +24,21 @@ from scipy.stats import pearsonr, spearmanr
 from scipy.signal import savgol_filter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+if not hasattr(importlib_metadata, "packages_distributions"):
+    try:
+        import importlib_metadata as backport_importlib_metadata
+    except ImportError:
+        backport_importlib_metadata = None
+
+    if backport_importlib_metadata and hasattr(
+        backport_importlib_metadata, "packages_distributions"
+    ):
+        importlib_metadata.packages_distributions = (
+            backport_importlib_metadata.packages_distributions
+        )
+    else:
+        importlib_metadata.packages_distributions = lambda: {}
 
 from progress_diff_utils import compute_progress_diff_rewards, get_progress_diff_reward_scale
 from reward_model import gen_image_net
@@ -53,8 +69,48 @@ def make_metaworld_env(env_name="drawer-open-v2", seed=0, random_init=True):
     return TimeLimit(NormalizedBoxEnv(env), env.max_path_length)
 
 
-def load_actor(model_dir, step, obs_dim, action_dim, hidden_dim=1024, hidden_depth=2):
+def _infer_actor_architecture(actor_state_dict, obs_dim, action_dim):
+    """Infer actor MLP width/depth from a saved state dict."""
+    linear_layers = []
+    for key, value in actor_state_dict.items():
+        if not (key.startswith("trunk.") and key.endswith(".weight")):
+            continue
+        parts = key.split(".")
+        if len(parts) < 3 or not parts[1].isdigit():
+            continue
+        linear_layers.append((int(parts[1]), tuple(value.shape)))
+
+    if not linear_layers:
+        raise RuntimeError("Could not infer actor architecture from checkpoint.")
+
+    linear_layers.sort()
+    hidden_dim = linear_layers[0][1][0]
+    hidden_depth = len(linear_layers) - 1
+
+    input_dim = linear_layers[0][1][1]
+    output_dim = linear_layers[-1][1][0]
+    expected_output_dim = 2 * action_dim
+    if input_dim != obs_dim or output_dim != expected_output_dim:
+        raise RuntimeError(
+            "Actor checkpoint shape does not match environment dims: "
+            f"expected input={obs_dim}, output={expected_output_dim}, "
+            f"got input={input_dim}, output={output_dim}."
+        )
+
+    return hidden_dim, hidden_depth
+
+
+def load_actor(model_dir, step, obs_dim, action_dim):
     """Load trained actor model."""
+    actor_path = os.path.join(model_dir, f'actor_{step}.pt')
+    if not os.path.exists(actor_path):
+        raise FileNotFoundError(f"Actor file not found: {actor_path}")
+
+    actor_state_dict = torch.load(actor_path, map_location=device)
+    hidden_dim, hidden_depth = _infer_actor_architecture(
+        actor_state_dict, obs_dim, action_dim
+    )
+
     actor = DiagGaussianActor(
         obs_dim=obs_dim,
         action_dim=action_dim,
@@ -63,13 +119,12 @@ def load_actor(model_dir, step, obs_dim, action_dim, hidden_dim=1024, hidden_dep
         log_std_bounds=[-5, 2]
     ).to(device)
 
-    actor_path = os.path.join(model_dir, f'actor_{step}.pt')
-    if not os.path.exists(actor_path):
-        raise FileNotFoundError(f"Actor file not found: {actor_path}")
-
-    actor.load_state_dict(torch.load(actor_path, map_location=device))
+    actor.load_state_dict(actor_state_dict)
     actor.eval()
-    print(f"Loaded actor from {actor_path}")
+    print(
+        f"Loaded actor from {actor_path} "
+        f"(hidden_dim={hidden_dim}, hidden_depth={hidden_depth})"
+    )
 
     return actor
 
