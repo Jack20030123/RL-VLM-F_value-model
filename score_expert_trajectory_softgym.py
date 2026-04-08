@@ -45,9 +45,9 @@ DEFAULT_CONFIGS = [
     dict(
         env='softgym_RopeFlattenEasy',
         default_steps=40,  # horizon from registered_env.py
-        actor_model_dir='/project2/biyik_1165/RL-VLM-F_value-model/exp/gt_reward_rope/softgym_RopeFlattenEasy/2026-03-19-00-05-34/vlm_0bard_rewardgt_task_reward_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init1000_unsup9000_inter5000_maxfeed20000_seg50_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
+        actor_model_dir='/scratch1/haobaizh/rlvlmf_online_logs/gt_reward_rope/softgym_RopeFlattenEasy/2026-03-19-00-05-34/vlm_0bard_rewardgt_task_reward_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init1000_unsup9000_inter5000_maxfeed20000_seg50_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
         actor_step=130000,
-        reward_model_dir='/project2/biyik_1165/RL-VLM-F_value-model/exp/baseline_gemini_rope/softgym_RopeFlattenEasy/2026-03-05-16-58-26/vlm_1gemini_free_form_rewardlearn_from_preference_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init250_unsup9000_inter5000_maxfeed20000_seg1_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
+        reward_model_dir='/scratch1/haobaizh/rlvlmf_online_logs/baseline_gemini_rope/softgym_RopeFlattenEasy/2026-03-05-16-58-26/vlm_1gemini_free_form_rewardlearn_from_preference_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init250_unsup9000_inter5000_maxfeed20000_seg1_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
         reward_model_step=385000,
         output_dir='expert_trajectory_output/rope',
         image_height=240,
@@ -60,9 +60,9 @@ DEFAULT_CONFIGS = [
     dict(
         env='softgym_PassWater',
         default_steps=75,  # horizon from registered_env.py
-        actor_model_dir='/project2/biyik_1165/RL-VLM-F_value-model/exp/gt_reward_passwater/softgym_PassWater/2026-03-19-00-20-22/vlm_0bard_rewardgt_task_reward_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init1000_unsup9000_inter5000_maxfeed20000_seg50_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
+        actor_model_dir='/scratch1/haobaizh/rlvlmf_online_logs/gt_reward_passwater/softgym_PassWater/2026-03-19-00-20-22/vlm_0bard_rewardgt_task_reward_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init1000_unsup9000_inter5000_maxfeed20000_seg50_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
         actor_step=210000,
-        reward_model_dir='/project2/biyik_1165/RL-VLM-F_value-model/exp/baseline_gemini_passwater/softgym_PassWater/2026-03-06-01-51-50/vlm_1gemini_free_form_rewardlearn_from_preference_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init1000_unsup9000_inter5000_maxfeed20000_seg1_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
+        reward_model_dir='/scratch1/haobaizh/rlvlmf_online_logs/baseline_gemini_passwater/softgym_PassWater/2026-03-06-01-51-50/vlm_1gemini_free_form_rewardlearn_from_preference_H256_L3_lr0.0003/teacher_b-1_g1_m0_s0_e0/label_smooth_0.0/schedule_0/PEBBLE_init1000_unsup9000_inter5000_maxfeed20000_seg1_acttanh_Rlr0.0001_Rbatch100_Rupdate30_en3_sample0_large_batch10_seed0/models/',
         reward_model_step=390000,
         output_dir='expert_trajectory_output/passwater',
         image_height=360,
