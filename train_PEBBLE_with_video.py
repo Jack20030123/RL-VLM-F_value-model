@@ -638,7 +638,7 @@ class Workspace(object):
             _supervised_started = False   # one-time flag for first preference learning
         # ───────────────────────────────────────────────────────────────────────
 
-        while (episode < _num_train_ep) if _use_episode else (self.step < self.cfg.num_train_steps):
+        while (episode <= _num_train_ep) if _use_episode else (self.step < self.cfg.num_train_steps):
             if done:
                 # VIDEO: End episode recording (for the episode that just finished)
                 if self.step > 0:
@@ -736,6 +736,11 @@ class Workspace(object):
                         ep_train_metrics["episode"] = episode
                         wandb.log(ep_train_metrics, step=self.step)
 
+                # In episode mode, the final episode has just finished its done-block
+                # above. Exit before resetting and starting episode N+1.
+                if _use_episode and self.step > 0 and episode >= _num_train_ep:
+                    break
+
                 if self.metaworld_random_init:
                     # Random seed each episode when metaworld_random_init is True
                     train_seed = self.episode_rng.randint(0, 400)
@@ -791,8 +796,11 @@ class Workspace(object):
 
                 # VIDEO: open a new recording window every N steps (step mode) or N episodes (episode mode)
                 if _use_episode:
-                    _video_ep_trigger = _video_ep_int - video_window_episodes + 1
-                    if episode > 0 and (episode % _video_ep_int) == _video_ep_trigger:
+                    # Record the last `video_window_episodes` episodes in each interval.
+                    # Episode counting here is 1-indexed because `episode` has already been
+                    # incremented for the new episode before we enter this block.
+                    _video_ep_trigger = max(0, _video_ep_int - video_window_episodes)
+                    if episode > 0 and ((episode - 1) % _video_ep_int) == _video_ep_trigger:
                         video_window_remaining = video_window_episodes
                 elif self.step >= next_video_checkpoint:
                     video_window_remaining = video_window_episodes
@@ -1165,7 +1173,7 @@ class Workspace(object):
         #   - step mode: after hitting num_train_steps mid-episode
         # In both cases, a currently recorded episode would otherwise never reach
         # end_episode(), so flush it here.
-        if _use_episode or self.episode_recorder.recording:
+        if self.episode_recorder.recording:
             should_save_video = True
             if self.save_env_reward_video_success_only and self.log_success:
                 should_save_video = (episode_success > 0)
@@ -1179,19 +1187,18 @@ class Workspace(object):
                         self.episode_recorder.visualizer.add_frame(f, last_reward)
             self.episode_recorder.end_episode(save_video=should_save_video, save_gif=False)
 
-        # ── Episode-mode: finalize the last episode ────────────────────────────
-        # The while loop exits (episode == _num_train_ep) BEFORE the last done-block
-        # runs, so the final episode's eval/success-window logging are skipped.
+        # ── Episode-mode: finalize any trailing success-rate window ────────────
         if _use_episode:
-            # 2. Final eval (only if the last episode aligns with eval frequency)
-            if _num_train_ep % _eval_ep_freq == 0:
-                self.evaluate(eval_cnt=eval_cnt, episode=_num_train_ep)
-            # 3. Log final partial success window if training didn't end on a 100-episode boundary
-            if self.log_success and len(success_history) > 0 and (_num_train_ep - 1) % 100 != 0:
-                final_rate = sum(success_history) / len(success_history)
+            # Final eval / checkpoint / video flush already happen in the regular
+            # done-block above. Only the trailing partial 100-episode success
+            # window still needs an explicit log here.
+            trailing_window = _num_train_ep % 100
+            if self.log_success and len(success_history) > 0 and trailing_window != 0:
+                trailing_successes = list(success_history)[-trailing_window:]
+                final_rate = sum(trailing_successes) / len(trailing_successes)
                 wandb.log({"train_step/success_rate_per_100ep": final_rate}, step=self.step)
                 wandb.log({"train_episode/success_rate_per_100ep": final_rate,
-                           "episode": _num_train_ep - 1}, step=self.step)
+                           "episode": _num_train_ep}, step=self.step)
         # ───────────────────────────────────────────────────────────────────────
 
         # Final checkpoint
