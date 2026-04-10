@@ -19,6 +19,7 @@ Usage:
 import argparse
 import importlib.metadata as importlib_metadata
 import os
+import random
 import sys
 import numpy as np
 import torch
@@ -53,6 +54,15 @@ from softgym.registered_env import env_arg_dict, SOFTGYM_ENVS
 from softgym.utils.normalized_env import normalize
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def set_seed_everywhere(seed):
+    """Match the training script's global seeding before env construction."""
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
 
 # --------------------------------------------------------------------------- #
 # Default configurations for the two softgym environments
@@ -190,7 +200,6 @@ def generate_expert_trajectory(env, actor, max_steps=200, resize_factor=3, seed=
     success = False
     success_step = None
 
-    np.random.seed(seed)
     obs = env.reset()
 
     for step in range(max_steps):
@@ -272,6 +281,7 @@ def process_env(cfg, args):
 
     # Create environment
     print(f"\n=== Creating Environment: {env_name} ===")
+    set_seed_everywhere(seed)
     env = make_softgym_env(env_name)
 
     obs_dim = env.observation_space.shape[0]
