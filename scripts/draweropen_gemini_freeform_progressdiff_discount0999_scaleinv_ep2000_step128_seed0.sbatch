@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=96G
 #SBATCH --time=48:00:00
-#SBATCH --job-name=draweropen_pd0999_ep2k128_s0
+#SBATCH --job-name=draweropen_pd0999_ep2k50_s0
 #SBATCH --output=logs/%x-%j.out
 
 module purge
@@ -64,7 +64,7 @@ apptainer exec --nv \
       feed_type=0 teacher_beta=-1 teacher_gamma=1 teacher_eps_skip=0 teacher_eps_equal=0 \
       terminate_on_success=false \
       use_episode=true \
-      max_episode_steps=128 \
+      max_episode_steps=50 \
       image_replay_capacity_episodes=400 \
       num_train_episodes=2000 \
       num_seed_episodes=2 \
@@ -75,12 +75,12 @@ apptainer exec --nv \
       video_episode_interval=200 \
       video_window_episodes=1 \
       save_env_reward_video_success_only=false \
-      num_train_steps=256000 \
-      num_seed_steps=256 \
-      num_unsup_steps=2304 \
-      num_interact=1024 \
-      eval_frequency=2560 \
-      save_interval=25600 \
+      num_train_steps=100000 \
+      num_seed_steps=100 \
+      num_unsup_steps=900 \
+      num_interact=400 \
+      eval_frequency=1000 \
+      save_interval=10000 \
       reward_batch=40 reward_update=10 \
       max_feedback=20000 \
       gradient_update=1 activation=tanh \
@@ -90,5 +90,5 @@ apptainer exec --nv \
       double_q_critic.params.hidden_dim=256 double_q_critic.params.hidden_depth=3 \
       diag_gaussian_actor.params.hidden_dim=256 diag_gaussian_actor.params.hidden_depth=3 \
       seed=0 \
-      exp_name=progressdiff_discount0999_scaleinv_gemini_freeform_ep2000_step128_seed0_draweropen
+      exp_name=progressdiff_discount0999_scaleinv_gemini_freeform_ep2000_step50_seed0_draweropen
   '
