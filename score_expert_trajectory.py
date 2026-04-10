@@ -50,7 +50,7 @@ import metaworld.envs.mujoco.env_dict as _env_dict
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def make_metaworld_env(env_name="drawer-open-v2", seed=0, random_init=True):
+def make_metaworld_env(env_name="drawer-open-v2", seed=0, random_init=False):
     """Create Metaworld environment."""
     if env_name.startswith("metaworld_"):
         env_name = env_name[len("metaworld_"):]
@@ -245,6 +245,8 @@ def main():
     parser.add_argument('--max_steps', type=int, default=500)
     parser.add_argument('--image_size', type=int, default=300)
     parser.add_argument('--output_dir', type=str, default='expert_trajectory_output')
+    parser.add_argument('--metaworld_random_init', action='store_true',
+                        help='Use randomized MetaWorld initialization; default matches training config metaworld_random_init=false.')
     parser.add_argument('--smooth_window', type=int, default=21,
                         help='Window length for Savitzky-Golay smoothing (must be odd, >= 3)')
     parser.add_argument('--progress_diff_discount', type=float, default=1.0,
@@ -279,7 +281,7 @@ def main():
 
     # Create environment
     print(f"\n=== Creating Environment: {args.env} ===")
-    env = make_metaworld_env(args.env, seed=args.seed)
+    env = make_metaworld_env(args.env, seed=args.seed, random_init=args.metaworld_random_init)
 
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
