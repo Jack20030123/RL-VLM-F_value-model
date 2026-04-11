@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=64G
+#SBATCH --mem=48G
 #SBATCH --time=48:00:00
 #SBATCH --job-name=draweropen_pd0999_ep2k20all_s0
 #SBATCH --output=logs/%x-%j.out
