@@ -34,9 +34,10 @@ fi
 : "${RLVLMF_MAX_FEEDBACK:?}"
 : "${RLVLMF_TERMINATE_ON_SUCCESS:?}"
 : "${RLVLMF_RESNET:?}"
+: "${RLVLMF_USE_SMOOTH_RELABEL:=0}"
 : "${RLVLMF_VIDEO_STEP_INTERVAL:=}"
 : "${RLVLMF_VIDEO_STEP_OFFSET:=}"
-export RLVLMF_VIDEO_STEP_INTERVAL RLVLMF_VIDEO_STEP_OFFSET
+export RLVLMF_USE_SMOOTH_RELABEL RLVLMF_VIDEO_STEP_INTERVAL RLVLMF_VIDEO_STEP_OFFSET
 
 module purge
 module load apptainer
@@ -90,7 +91,7 @@ cmd=(
   image_reward=1
   segment=1
   teacher_eps_mistake=0
-  use_smooth_relabel=0
+  use_smooth_relabel="$RLVLMF_USE_SMOOTH_RELABEL"
   feed_type=0
   teacher_beta=-1
   teacher_gamma=1
