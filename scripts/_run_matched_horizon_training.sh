@@ -4,15 +4,24 @@ set -euo pipefail
 : "${RLVLMF_TASK_ENV:?}"
 : "${RLVLMF_METHOD:?}"
 : "${RLVLMF_EXP_NAME:?}"
+: "${RLVLMF_USE_EPISODE:=true}"
+export RLVLMF_USE_EPISODE
 : "${RLVLMF_MAX_EPISODE_STEPS:?}"
-: "${RLVLMF_IMAGE_REPLAY_CAPACITY_EPISODES:?}"
-: "${RLVLMF_NUM_TRAIN_EPISODES:?}"
-: "${RLVLMF_NUM_SEED_EPISODES:?}"
-: "${RLVLMF_NUM_UNSUP_EPISODES:?}"
-: "${RLVLMF_NUM_INTERACT_EPISODES:?}"
-: "${RLVLMF_EVAL_EPISODE_FREQUENCY:?}"
-: "${RLVLMF_SAVE_EPISODE_INTERVAL:?}"
-: "${RLVLMF_VIDEO_EPISODE_INTERVAL:?}"
+if [ "$RLVLMF_USE_EPISODE" = "true" ]; then
+  : "${RLVLMF_IMAGE_REPLAY_CAPACITY_EPISODES:?}"
+  : "${RLVLMF_NUM_TRAIN_EPISODES:?}"
+  : "${RLVLMF_NUM_SEED_EPISODES:?}"
+  : "${RLVLMF_NUM_UNSUP_EPISODES:?}"
+  : "${RLVLMF_NUM_INTERACT_EPISODES:?}"
+  : "${RLVLMF_EVAL_EPISODE_FREQUENCY:?}"
+  : "${RLVLMF_SAVE_EPISODE_INTERVAL:?}"
+  : "${RLVLMF_VIDEO_EPISODE_INTERVAL:?}"
+elif [ "$RLVLMF_USE_EPISODE" = "false" ]; then
+  : "${RLVLMF_IMAGE_REPLAY_CAPACITY:?}"
+else
+  echo "RLVLMF_USE_EPISODE must be true or false, got $RLVLMF_USE_EPISODE" >&2
+  exit 2
+fi
 : "${RLVLMF_NUM_TRAIN_STEPS:?}"
 : "${RLVLMF_NUM_SEED_STEPS:?}"
 : "${RLVLMF_NUM_UNSUP_STEPS:?}"
@@ -25,6 +34,9 @@ set -euo pipefail
 : "${RLVLMF_MAX_FEEDBACK:?}"
 : "${RLVLMF_TERMINATE_ON_SUCCESS:?}"
 : "${RLVLMF_RESNET:?}"
+: "${RLVLMF_VIDEO_STEP_INTERVAL:=}"
+: "${RLVLMF_VIDEO_STEP_OFFSET:=}"
+export RLVLMF_VIDEO_STEP_INTERVAL RLVLMF_VIDEO_STEP_OFFSET
 
 module purge
 module load apptainer
@@ -85,16 +97,8 @@ cmd=(
   teacher_eps_skip=0
   teacher_eps_equal=0
   terminate_on_success="$RLVLMF_TERMINATE_ON_SUCCESS"
-  use_episode=true
+  use_episode="$RLVLMF_USE_EPISODE"
   max_episode_steps="$RLVLMF_MAX_EPISODE_STEPS"
-  image_replay_capacity_episodes="$RLVLMF_IMAGE_REPLAY_CAPACITY_EPISODES"
-  num_train_episodes="$RLVLMF_NUM_TRAIN_EPISODES"
-  num_seed_episodes="$RLVLMF_NUM_SEED_EPISODES"
-  num_unsup_episodes="$RLVLMF_NUM_UNSUP_EPISODES"
-  num_interact_episodes="$RLVLMF_NUM_INTERACT_EPISODES"
-  eval_episode_frequency="$RLVLMF_EVAL_EPISODE_FREQUENCY"
-  save_episode_interval="$RLVLMF_SAVE_EPISODE_INTERVAL"
-  video_episode_interval="$RLVLMF_VIDEO_EPISODE_INTERVAL"
   video_window_episodes=1
   save_env_reward_video_success_only=false
   num_train_steps="$RLVLMF_NUM_TRAIN_STEPS"
@@ -120,6 +124,29 @@ cmd=(
   seed=0
   exp_name="$RLVLMF_EXP_NAME"
 )
+
+if [ "$RLVLMF_USE_EPISODE" = "true" ]; then
+  cmd+=(
+    image_replay_capacity_episodes="$RLVLMF_IMAGE_REPLAY_CAPACITY_EPISODES"
+    num_train_episodes="$RLVLMF_NUM_TRAIN_EPISODES"
+    num_seed_episodes="$RLVLMF_NUM_SEED_EPISODES"
+    num_unsup_episodes="$RLVLMF_NUM_UNSUP_EPISODES"
+    num_interact_episodes="$RLVLMF_NUM_INTERACT_EPISODES"
+    eval_episode_frequency="$RLVLMF_EVAL_EPISODE_FREQUENCY"
+    save_episode_interval="$RLVLMF_SAVE_EPISODE_INTERVAL"
+    video_episode_interval="$RLVLMF_VIDEO_EPISODE_INTERVAL"
+  )
+else
+  cmd+=(image_replay_capacity="$RLVLMF_IMAGE_REPLAY_CAPACITY")
+fi
+
+if [ -n "$RLVLMF_VIDEO_STEP_INTERVAL" ]; then
+  cmd+=(video_step_interval="$RLVLMF_VIDEO_STEP_INTERVAL")
+fi
+
+if [ -n "$RLVLMF_VIDEO_STEP_OFFSET" ]; then
+  cmd+=(video_step_offset="$RLVLMF_VIDEO_STEP_OFFSET")
+fi
 
 if [ "$RLVLMF_RESNET" = "1" ]; then
   cmd+=(resnet=1)
