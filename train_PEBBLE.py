@@ -23,6 +23,37 @@ import cv2
 import wandb
 
 
+def override_episode_horizon(env, max_episode_steps):
+    """Apply a horizon override through wrappers and SoftGym's internal horizon."""
+    max_episode_steps = int(max_episode_steps)
+    seen = set()
+    stack = [env]
+
+    while stack:
+        current_env = stack.pop()
+        if current_env is None or id(current_env) in seen:
+            continue
+        seen.add(id(current_env))
+
+        try:
+            current_env._max_episode_steps = max_episode_steps
+        except Exception:
+            pass
+        if hasattr(current_env, 'horizon'):
+            try:
+                current_env.horizon = max_episode_steps
+            except Exception:
+                pass
+
+        for attr in ('_wrapped_env', 'env'):
+            try:
+                wrapped = getattr(current_env, attr)
+            except Exception:
+                wrapped = None
+            if wrapped is not None and wrapped is not current_env:
+                stack.append(wrapped)
+
+
 class Workspace(object):
     def __init__(self, cfg):
         self.work_dir = os.getcwd()
@@ -65,7 +96,7 @@ class Workspace(object):
 
         # Override max episode steps if specified (0 = use env default)
         if getattr(cfg, 'max_episode_steps', 0) > 0:
-            self.env._max_episode_steps = cfg.max_episode_steps
+            override_episode_horizon(self.env, cfg.max_episode_steps)
 
         # Agent I/O shapes
         cfg.agent.params.obs_dim = self.env.observation_space.shape[0]
