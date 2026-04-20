@@ -165,6 +165,14 @@ case "$RLVLMF_METHOD" in
       progress_diff_scale_by_inv_one_minus_gamma=true
     )
     ;;
+  progressdiff_discount1_scale100)
+    cmd+=(
+      use_progress_diff_reward=true
+      progress_diff_discount=1.0
+      progress_diff_reward_scale=100.0
+      progress_diff_scale_by_inv_one_minus_gamma=false
+    )
+    ;;
   *)
     echo "Unknown RLVLMF_METHOD=$RLVLMF_METHOD" >&2
     exit 2
