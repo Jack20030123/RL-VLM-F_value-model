@@ -13,6 +13,7 @@
 export RLVLMF_TASK_ENV=metaworld_drawer-open-v2
 export RLVLMF_METHOD=baseline
 export RLVLMF_EXP_NAME=baseline_gemini_freeform_ep2000_step30_allimages_matched_seed0_draweropen
+export RLVLMF_USE_EPISODE=true
 export RLVLMF_MAX_EPISODE_STEPS=30
 export RLVLMF_IMAGE_REPLAY_CAPACITY_EPISODES=2000
 export RLVLMF_NUM_TRAIN_EPISODES=2000
