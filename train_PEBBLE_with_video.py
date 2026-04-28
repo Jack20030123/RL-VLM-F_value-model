@@ -1218,6 +1218,15 @@ class Workspace(object):
                         self.episode_recorder.visualizer.add_frame(f, last_reward)
             self.episode_recorder.end_episode(save_video=should_save_video, save_gif=False)
 
+        # Step mode exits immediately after self.step reaches num_train_steps.
+        # If that last step also ended an episode, the usual done-block eval at
+        # the top of the next loop would otherwise be skipped.
+        if (not _use_episode and done and self.step > 0
+                and self.step >= (eval_cnt + 1) * self.cfg.eval_frequency):
+            self.logger.log('eval/episode', episode, self.step)
+            self.evaluate(eval_cnt=eval_cnt)
+            eval_cnt += 1
+
         # ── Episode-mode: finalize any trailing success-rate window ────────────
         if _use_episode:
             # Final eval / checkpoint / video flush already happen in the regular
