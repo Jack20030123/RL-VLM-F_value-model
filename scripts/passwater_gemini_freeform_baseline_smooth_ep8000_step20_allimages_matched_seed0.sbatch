@@ -7,12 +7,14 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=120G
 #SBATCH --time=48:00:00
-#SBATCH --job-name=passwat_base_h20_s0
+#SBATCH --job-name=passwat_bsmooth_h20_s0
 #SBATCH --output=logs/%x-%j.out
 
 export RLVLMF_TASK_ENV=softgym_PassWater
 export RLVLMF_METHOD=baseline
-export RLVLMF_EXP_NAME=baseline_gemini_freeform_ep8000_step20_allimages_matched_seed0_passwater
+export RLVLMF_EXP_NAME=baseline_smooth_gemini_freeform_ep8000_step20_allimages_matched_seed0_passwater
+export RLVLMF_USE_SMOOTH_RELABEL=1
+export RLVLMF_SMOOTH_WINDOW=5
 export RLVLMF_USE_EPISODE=true
 export RLVLMF_MAX_EPISODE_STEPS=20
 export RLVLMF_IMAGE_REPLAY_CAPACITY_EPISODES=8000

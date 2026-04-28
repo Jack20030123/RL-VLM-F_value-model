@@ -7,14 +7,12 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=48:00:00
-#SBATCH --job-name=rope_bsmooth_h10_s0
+#SBATCH --job-name=rope_pd1shp1o2_h10_s0
 #SBATCH --output=logs/%x-%j.out
 
 export RLVLMF_TASK_ENV=softgym_RopeFlattenEasy
-export RLVLMF_METHOD=baseline
-export RLVLMF_EXP_NAME=baseline_smooth_gemini_freeform_ep15000_step10_allimages_matched_seed0_rope
-export RLVLMF_USE_SMOOTH_RELABEL=1
-export RLVLMF_SMOOTH_WINDOW=3
+export RLVLMF_METHOD=progressdiff_discount1_scale_hplus1_over2
+export RLVLMF_EXP_NAME=progressdiff_discount1_scale_hplus1_over2_gemini_freeform_ep15000_step10_allimages_matched_seed0_rope
 export RLVLMF_USE_EPISODE=true
 export RLVLMF_MAX_EPISODE_STEPS=10
 export RLVLMF_IMAGE_REPLAY_CAPACITY_EPISODES=15000
